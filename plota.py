@@ -7,10 +7,11 @@ Created on Sat May 27 09:17:14 2023
 
 import numpy as np
 import cv2
+import networkx as nx
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-import slitherlink.main as sl
+import main as sl
 
 
 # =============================================================================
@@ -227,11 +228,13 @@ def gera_imagem(tab,**kwargs):
                 v0 = v1
         
    
-    # Plota as dicas do tabuleiro
+    # Plota as dicas do tabuleiro (valores negativos = célula sem dica)
     if plota_dicas:
         for l in range(tab.lin-1):
             for c in range(tab.col-1):
                 dica = tab.dicas[l][c]
+                if dica < 0:
+                    continue
                 v = tab.get_verticeXY(l,c)
                 texto = '{:0.0f}'.format(dica)
                 
@@ -276,13 +279,16 @@ def plota_tabuleiro(tabuleiro: sl.Tabuleiro
     Matriz numpy.darray representando a imagem gerada
 
     """
-    img = gera_imagem(tabuleiro,kwargs=kwargs)
-           
-    # Exibe a imagem
-    ratio = (img.shape[0]/sum(img.shape),img.shape[1]/sum(img.shape))
+    img = gera_imagem(tabuleiro,**kwargs)
+
+    # Exibe a imagem mantendo a proporção altura/largura
+    maior_dim = max(img.shape[0],img.shape[1])
+    ratio = (img.shape[1]/maior_dim,img.shape[0]/maior_dim)
     plt.figure(figsize=(escala*ratio[0]
                         ,escala*ratio[1]))
     plt.imshow(img)
+
+    return img
     
     
     
@@ -302,7 +308,7 @@ def grava_caminho(tabuleiro     : sl.Tabuleiro
                   ,verbose      : bool = True
                   ,**kwargs     : dict):
     """
-    Grava um vídeo no formato MP3 com o passeio aleatório
+    Grava um vídeo no formato MP4 com o passeio aleatório
     realizado
 
     Parameters
@@ -346,9 +352,9 @@ def grava_caminho(tabuleiro     : sl.Tabuleiro
         tab.preenche_dicas()
     img = gera_imagem(tab
                       ,plota_dicas=plota_dicas
-                      ,kwargs=kwargs)
+                      ,**kwargs)
 
-    # Inicia o gravador de vídeo        
+    # Inicia o gravador de vídeo
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     vvw = cv2.VideoWriter(arquivo_saida
                           ,fourcc
@@ -375,30 +381,30 @@ def grava_caminho(tabuleiro     : sl.Tabuleiro
         v_auxiliar = tab.get_verticeN(n_original)  
 
         # Inclui o novo vértice (sinal > 0)
-        if sinal == 1: 
-            
+        if sinal == 1:
+
             # Inclui a aresta no tabuleiro auxiliar
             tab.caminho.append(v_auxiliar)
             tab.G.add_edge(v,v_auxiliar)
-        
-        # Exclui o novo vértice (sinal < 0)
+            v = v_auxiliar
+
+        # Exclui o novo vértice (sinal < 0). O vértice excluído é sempre
+        # a ponta do caminho; a nova ponta passa a ser o vértice anterior
         else:
-            tab.caminho.remove(v_auxiliar)
+            tab.caminho.pop()
             try:
                 tab.G.remove_edge(v_auxiliar,tab.caminho[-1])
-            except:
+            except nx.NetworkXError:
                 pass
+            v = tab.caminho[-1]
 
-        # Avança o vértice
-        v = v_auxiliar
-            
-        
+
         # Captura a imagem do estado do tabuleiro
         if plota_dicas:
             tab.preenche_dicas()
         img = gera_imagem(tab
                           ,plota_dicas=plota_dicas
-                          ,kwargs=kwargs)
+                          ,**kwargs)
         
         # Converte para RGB
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
