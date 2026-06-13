@@ -1,0 +1,7 @@
+# Saídas geradas (imagens e vídeos dos tabuleiros)
+*.png
+*.mp4
+
+# Cache do Python
+__pycache__/
+*.pyc

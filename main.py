@@ -52,7 +52,8 @@ class Vertice:
 
         Returns
         -------
-        Maior distância diferença entre os eixos de ambos os vértices.
+        Distância de Manhattan entre os dois vértices (soma das diferenças
+        absolutas entre linhas e colunas).
         """
         dx = abs(self.l - v.l)
         dy = abs(self.c - v.c)
@@ -113,9 +114,7 @@ class Tabuleiro:
     def par(self):
         return {'lin':self.lin
                 ,'col':self.col
-                ,'shape':self.shape
-                ,'escala_imagem':self.escala_imagem
-                ,'escala_ponto':self.escala_ponto}        
+                ,'shape':self.shape}
 
     def n_para_xy(self,n):
         """
@@ -132,7 +131,7 @@ class Tabuleiro:
 
         """
         col = n % self.col
-        lin = (n - col) / self.col
+        lin = n // self.col
         return(lin,col)
 
     def xy_para_n(self,l,c):
@@ -213,22 +212,22 @@ class Tabuleiro:
 
     def get_vertice_direita(self,v):
         """
-        Retorna o vértice vizinho, acima do vértice informado, se existir.
+        Retorna o vértice vizinho, à direita do vértice informado, se existir.
 
         Parameters
         ----------
         v : Vertice
-            Vértice para calcular o vizinho superior
+            Vértice para calcular o vizinho à direita
 
         Returns
         -------
         Vertice
-            Vértice superior, None se não existir (vértice informado estiver
-            na borda do tabuleiro)
+            Vértice à direita (mesma linha, coluna seguinte), None se não
+            existir (vértice informado estiver na borda do tabuleiro)
 
         """
-        if v.l < self.lin-1:
-            return self.get_verticeXY(v.l+1,v.c)
+        if v.c < self.col-1:
+            return self.get_verticeXY(v.l,v.c+1)
         else:
             return None
 
@@ -244,15 +243,15 @@ class Tabuleiro:
         Returns
         -------
         Vertice
-            Vértice à esquerda, None se não existir (vértice informado estiver
-            na borda do tabuleiro)
+            Vértice à esquerda (mesma linha, coluna anterior), None se não
+            existir (vértice informado estiver na borda do tabuleiro)
 
-        """ 
-        if v.l > 0:
-            return self.get_verticeXY(v.l-1,v.c)
+        """
+        if v.c > 0:
+            return self.get_verticeXY(v.l,v.c-1)
         else:
             return None
-        
+
     def get_vertice_acima(self,v):
         """
         Retorna o vértice vizinho, acima do vértice informado, se existir.
@@ -265,15 +264,15 @@ class Tabuleiro:
         Returns
         -------
         Vertice
-            Vértice acima, None se não existir (vértice informado estiver
-            na borda do tabuleiro)
+            Vértice acima (linha anterior, mesma coluna), None se não
+            existir (vértice informado estiver na borda do tabuleiro)
 
-        """ 
-        if v.c < self.col-1:
-            return self.get_verticeXY(v.l,v.c+1)
+        """
+        if v.l > 0:
+            return self.get_verticeXY(v.l-1,v.c)
         else:
             return None
-        
+
     def get_vertice_abaixo(self,v):
         """
         Retorna o vértice vizinho, abaixo do vértice informado, se existir.
@@ -286,12 +285,12 @@ class Tabuleiro:
         Returns
         -------
         Vertice
-            Vértice abaixo, None se não existir (vértice informado estiver
-            na borda do tabuleiro)
+            Vértice abaixo (linha seguinte, mesma coluna), None se não
+            existir (vértice informado estiver na borda do tabuleiro)
 
-        """ 
-        if v.c > 0:
-            return self.get_verticeXY(v.l,v.c-1)
+        """
+        if v.l < self.lin-1:
+            return self.get_verticeXY(v.l+1,v.c)
         else:
             return None
 
