@@ -32,6 +32,7 @@ There are two implementations that share the same ideas:
 - [The browser game](#the-browser-game)
 - [Repository layout](#repository-layout)
 - [Running it](#running-it)
+- [References & acknowledgements](#references--acknowledgements)
 - [License](#license)
 
 ---
@@ -330,6 +331,12 @@ cd web
 node js/test_core.js            # generation + uniqueness across sizes/difficulties
 node js/fuzz_core.js            # solver compared to brute force on small boards
 ```
+
+## References & acknowledgements
+
+- **Liam Appelbe — [_How to generate Slither Link puzzles_](https://liamappelbe.medium.com/how-to-generate-slither-link-puzzles-6c65510b2ba1).** This project's region/cell‑colouring approach to loop generation and its **binary‑search clue removal** are directly informed by this excellent writeup — well worth reading.
+- Jonathan Olson — [_How Slitherlink Should Be Solved_](https://jonathanolson.net/slitherlink/): a catalogue of the logical solving patterns.
+- Yoshinaka, Saitoh, Kawahara, Tsuruma, Iwashita & Minato — [_Finding All Solutions and Instances of Numberlink and Slitherlink by ZDDs_](https://www.mdpi.com/1999-4893/5/2/176), *Algorithms* 5(2), 2012.
 
 ## License
 

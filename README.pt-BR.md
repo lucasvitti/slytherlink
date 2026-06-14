@@ -32,6 +32,7 @@ Há duas implementações que compartilham as mesmas ideias:
 - [O jogo de navegador](#o-jogo-de-navegador)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Como executar](#como-executar)
+- [Referências e agradecimentos](#referências-e-agradecimentos)
 - [Licença](#licença)
 
 ---
@@ -345,6 +346,12 @@ cd web
 node js/test_core.js            # generation + uniqueness across sizes/difficulties
 node js/fuzz_core.js            # solver compared to brute force on small boards
 ```
+
+## Referências e agradecimentos
+
+- **Liam Appelbe — [_How to generate Slither Link puzzles_](https://liamappelbe.medium.com/how-to-generate-slither-link-puzzles-6c65510b2ba1).** A abordagem de geração do laço por coloração de células/regiões e a **remoção de dicas por busca binária** deste projeto são diretamente inspiradas por esse excelente artigo — vale muito a leitura.
+- Jonathan Olson — [_How Slitherlink Should Be Solved_](https://jonathanolson.net/slitherlink/): um catálogo dos padrões de dedução lógica.
+- Yoshinaka, Saitoh, Kawahara, Tsuruma, Iwashita & Minato — [_Finding All Solutions and Instances of Numberlink and Slitherlink by ZDDs_](https://www.mdpi.com/1999-4893/5/2/176), *Algorithms* 5(2), 2012.
 
 ## Licença
 
