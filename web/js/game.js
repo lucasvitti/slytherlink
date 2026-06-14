@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '19';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '20';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -653,15 +653,22 @@
 
     $('resolver').textContent = '⏸ Parar';
 
-    // velocidade = passos por segundo (slider numérico) -> ms por passo;
-    // agrupa passos p/ não passar de ~MAX_TOTAL ms no total
+    // velocidade = passos por segundo (slider). dPasso = ms por passo pedido.
+    // Como o setInterval não roda bem abaixo de ~16ms, para velocidades ALTAS
+    // (passo < 16ms) mantemos o quadro em 16ms e fazemos VÁRIOS passos por quadro
+    // em vez de encurtar o delay. Para velocidades baixas/médias, 1 passo por
+    // quadro no ritmo exato pedido — assim o slider é sempre respeitado.
     const sps = Math.max(2, +$('velocidade').value || 15);
-    const dPasso = Math.max(4, Math.round(1000 / sps));
-    const MAX_TOTAL = 20000;
-    let porQuadro = 1, delay = Math.max(12, dPasso);
-    if (trace.length * dPasso > MAX_TOTAL) {
-      delay = 16;
-      porQuadro = Math.max(1, Math.ceil(trace.length / (MAX_TOTAL / delay)));
+    const dPasso = 1000 / sps;
+    let porQuadro = 1, delay;
+    if (dPasso >= 16) { delay = dPasso; }
+    else { delay = 16; porQuadro = Math.max(1, Math.round(16 / dPasso)); }
+    // segurança só p/ traços ENORMES (tabuleiros gigantes): nunca passar de ~2min
+    // no total — e isso só ACELERA (mais passos por quadro), nunca desacelera o
+    // que o usuário pediu.
+    const MAX_TOTAL = 120000;
+    if ((trace.length / porQuadro) * delay > MAX_TOTAL) {
+      porQuadro = Math.ceil(trace.length * delay / MAX_TOTAL);
     }
     // câmera que segue o solver: transition no transform p/ o pan deslizar
     // (quanto mais rápido o solver, mais curto o deslize)
