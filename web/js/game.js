@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '11';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '12';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -43,6 +43,7 @@
     geo: null, won: false,                     // geometria e flag de vitória
     zoom: 1,                    // fator de zoom do tabuleiro (1 = tamanho base)
     gesturing: false,           // true durante pan/pinça multitoque (suspende o traço)
+    slots: [null, null, null, null, null],  // 5 checkpoints (estados salvos)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
   };
 
@@ -106,6 +107,9 @@
     const svg = $('tabuleiro');
     svg.setAttribute('width', Math.round(S.geo.w * S.zoom));
     svg.setAttribute('height', Math.round(S.geo.h * S.zoom));
+    // espessura das linhas escala como 1/√zoom (sub-linear): ao ampliar, a
+    // linha cresce mais devagar que as células e não vira "salsicha".
+    svg.style.setProperty('--sw', (1 / Math.sqrt(S.zoom)).toFixed(3));
     const pct = $('zoomPct');
     if (pct) pct.textContent = Math.round(S.zoom * 100) + '%';
   }
@@ -259,6 +263,8 @@
     S.undo = []; S.redo = []; S.won = false;
     S.geo = computeGeo(p.rows, p.cols);
     S.zoom = 1;
+    S.slots = [null, null, null, null, null];   // checkpoints são por tabuleiro
+    atualizaCheckpoints();
     buildSvg(); refresh();
     setStatus('Tabuleiro ' + p.rows + '×' + p.cols + ' — dificuldade ' + p.dificuldade + '.');
     const metodoTxt = (p.metodo && p.dificuldade !== 'nenhuma') ? ' · ' + p.metodo : '';
@@ -495,6 +501,44 @@
     for (const k of S.lines) changes.push({ key: k, kind: 'line', from: true, to: false });
     for (const k of S.marks) changes.push({ key: k, kind: 'mark', from: true, to: false });
     pushMove(changes);
+  }
+
+  // -------------------------------------------------- checkpoints (5 estados)
+  // Salva o estado atual (traços, marcas e cores) no slot i (sobrescreve).
+  function salvarSlot(i) {
+    if (!S.puzzle) return;
+    S.slots[i] = { lines: new Set(S.lines), marks: new Set(S.marks), colors: { ...S.colors } };
+    atualizaCheckpoints();
+    setStatus('Checkpoint ' + (i + 1) + ' salvo (' + S.lines.size + ' arestas).');
+  }
+  // Volta o tabuleiro ao estado salvo no slot i. É um único movimento
+  // desfazível (a diferença em relação ao estado atual).
+  function carregarSlot(i) {
+    const s = S.slots[i];
+    if (!s || !S.puzzle) return;
+    stopSolve();
+    const changes = [];
+    for (const k of S.lines) if (!s.lines.has(k)) changes.push({ key: k, kind: 'line', from: true, to: false });
+    for (const k of s.lines) if (!S.lines.has(k)) changes.push({ key: k, kind: 'line', from: false, to: true });
+    for (const k of S.marks) if (!s.marks.has(k)) changes.push({ key: k, kind: 'mark', from: true, to: false });
+    for (const k of s.marks) if (!S.marks.has(k)) changes.push({ key: k, kind: 'mark', from: false, to: true });
+    // aplica direto (preservando as cores salvas) e registra para desfazer
+    S.lines = new Set(s.lines);
+    S.marks = new Set(s.marks);
+    S.colors = { ...s.colors };
+    if (changes.length) { S.undo.push({ changes }); S.redo = []; }
+    refresh();
+    setStatus('Checkpoint ' + (i + 1) + ' carregado.');
+  }
+  // Sincroniza os botões dos checkpoints com o que está salvo.
+  function atualizaCheckpoints() {
+    for (let i = 0; i < 5; i++) {
+      const cheio = !!S.slots[i];
+      const sv = document.querySelector('[data-save="' + i + '"]');
+      const ld = document.querySelector('[data-load="' + i + '"]');
+      if (sv) sv.classList.toggle('cheio', cheio);
+      if (ld) { ld.classList.toggle('cheio', cheio); ld.disabled = !cheio; }
+    }
   }
 
   // -------------------------------------------------- cores dos segmentos
@@ -756,6 +800,10 @@
     $('desfazer').addEventListener('click', undo);
     $('refazer').addEventListener('click', redo);
     $('limpar').addEventListener('click', limpar);
+    document.querySelectorAll('[data-save]').forEach((b) =>
+      b.addEventListener('click', () => salvarSlot(+b.dataset.save)));
+    document.querySelectorAll('[data-load]').forEach((b) =>
+      b.addEventListener('click', () => carregarSlot(+b.dataset.load)));
     $('exportar').addEventListener('click', exportCsv);
     $('importar').addEventListener('click', () => $('arquivo').click());
     $('arquivo').addEventListener('change', (e) => {
@@ -800,7 +848,7 @@
     state: S,
     solve() { S.lines = new Set(S.puzzle.solution); S.marks = new Set(); S.undo = []; S.redo = []; S.colors = {}; refresh(); return S.won; },
     toggleLine, toggleMark, undo, redo, limpar, refresh, exportCsv, importCsv,
-    setZoom, zoomFit,
+    setZoom, zoomFit, salvarSlot, carregarSlot,
   };
 
   // inicializa assim que o DOM estiver pronto

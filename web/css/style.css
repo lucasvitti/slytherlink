@@ -7,8 +7,8 @@
   --border: #2a2f3a;
   --accent: #4f9dff;
 
-  --grid: rgba(255, 255, 255, 0.18);     /* grade pontilhada */
-  --grid-faint: rgba(255, 255, 255, 0.06); /* arestas inviáveis (mais fracas) */
+  --grid: rgba(255, 255, 255, 0.20);     /* grade pontilhada */
+  --grid-faint: rgba(255, 255, 255, 0.035); /* arestas inviáveis (bem mais fracas) */
   --dot: rgba(255, 255, 255, 0.28);
   --clue: #f4a08c;        /* dicas em salmão */
   --clue-ok: #6d7585;
@@ -79,18 +79,27 @@ svg { display: block; margin: 0 auto; touch-action: none;
 #zoomPct { min-width: 48px; text-align: center; font-size: 13px; color: var(--muted);
   font-variant-numeric: tabular-nums; }
 
-/* arestas */
+/* checkpoints (5 estados salváveis do tabuleiro) */
+.checkpoints { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; font-size: 12px; color: var(--muted); }
+.ckgroup { display: flex; align-items: center; gap: 4px; }
+.checkpoints button { min-width: 26px; padding: 4px 7px; font-size: 12px; }
+.checkpoints button.cheio { border-color: var(--accent); color: var(--accent); }
+.checkpoints button[data-load]:disabled { opacity: 0.35; }
+
+/* arestas — a espessura usa --sw (definido em aplicaZoom = 1/√zoom): ao
+   ampliar, a linha afina em relação às células e não vira "salsicha". */
 .aresta { fill: none; stroke-linecap: round; pointer-events: none; }
-.aresta.grade { stroke: var(--grid); stroke-width: 2.4; stroke-dasharray: 0.1 7; }
-.aresta.inviavel { stroke: var(--grid-faint); stroke-width: 2.4; stroke-dasharray: 0.1 7; }
-.aresta.traco { stroke-width: 6; filter: drop-shadow(0 0 5px currentColor); }
-.aresta.erro { stroke: var(--error); stroke-width: 6; }
-.aresta.foco { stroke: #ffffff !important; stroke-width: 7; filter: drop-shadow(0 0 7px #fff); }
+.aresta.grade { stroke: var(--grid); stroke-width: calc(2.4 * var(--sw, 1)); stroke-dasharray: 0.1 7; }
+.aresta.inviavel { stroke: var(--grid-faint); stroke-width: calc(2.4 * var(--sw, 1)); stroke-dasharray: 0.1 7; }
+.aresta.traco { stroke-width: calc(6 * var(--sw, 1)); filter: drop-shadow(0 0 calc(4px * var(--sw, 1)) currentColor); }
+.aresta.erro { stroke: var(--error); stroke-width: calc(6 * var(--sw, 1)); }
+.aresta.foco { stroke: #ffffff !important; stroke-width: calc(7 * var(--sw, 1)); filter: drop-shadow(0 0 calc(6px * var(--sw, 1)) #fff); }
 
 .hit { stroke: transparent; stroke-width: 20; cursor: pointer; }
 .hit:hover + .aresta.grade { stroke: rgba(255,255,255,0.4); }
 
-.marca { stroke: var(--mark); stroke-width: 2.4; stroke-linecap: round; pointer-events: none; }
+.marca { stroke: var(--mark); stroke-width: calc(2.4 * var(--sw, 1)); stroke-linecap: round; pointer-events: none; }
 .marca.oculto { display: none; }
 
 .ponto { fill: var(--dot); }

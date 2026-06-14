@@ -72,6 +72,14 @@
       <button id="zoomIn" title="Aumentar (Ctrl +)">+</button>
       <button id="zoomFit" title="Ajustar à tela (Ctrl 0)">Ajustar</button>
     </div>
+    <div class="checkpoints" title="Salve até 5 estados do tabuleiro e volte a eles">
+      <span class="ckgroup">Salvar:
+        <button data-save="0">1</button><button data-save="1">2</button><button data-save="2">3</button><button data-save="3">4</button><button data-save="4">5</button>
+      </span>
+      <span class="ckgroup">Carregar:
+        <button data-load="0" disabled>1</button><button data-load="1" disabled>2</button><button data-load="2" disabled>3</button><button data-load="3" disabled>4</button><button data-load="4" disabled>5</button>
+      </span>
+    </div>
     <div id="status" class="status"></div>
   </main>
 
@@ -81,7 +89,7 @@
     ao unir dois, prevalece a cor do maior. <span id="infoPuzzle"></span>
   </footer>
 
-  <script src="js/core.js?v=11"></script>
-  <script src="js/game.js?v=11"></script>
+  <script src="js/core.js?v=12"></script>
+  <script src="js/game.js?v=12"></script>
 </body>
 </html>
