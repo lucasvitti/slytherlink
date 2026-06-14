@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '16';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '17';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -46,6 +46,7 @@
     gesturing: false,           // true durante pan/pinça multitoque (suspende o traço)
     slots: [null, null, null, null, null],  // 5 checkpoints (estados salvos)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
+    camRAF: null,               // rAF da câmera animada (recuo até 100% ao vencer)
   };
 
   // Web Worker preguiçoso: criado na 1ª geração e reaproveitado.
@@ -117,6 +118,7 @@
 
   // Centraliza o tabuleiro no palco (ao gerar e no "Ajustar").
   function centraliza() {
+    cancelAnimacaoCamera();
     const r = $('scroll').getBoundingClientRect();
     S.panX = (r.width - S.geo.w * S.zoom) / 2;
     S.panY = (r.height - S.geo.h * S.zoom) / 2;
@@ -138,6 +140,7 @@
    */
   function setZoom(z, ax, ay) {
     if (!S.puzzle) return;
+    cancelAnimacaoCamera();
     const r = $('scroll').getBoundingClientRect();
     if (ax == null) { ax = r.left + r.width / 2; ay = r.top + r.height / 2; }
     z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
@@ -194,6 +197,39 @@
     }
   }
 
+  // interrompe a câmera animada (ao vencer) se o usuário assume o controle
+  function cancelAnimacaoCamera() {
+    if (S.camRAF) { cancelAnimationFrame(S.camRAF); S.camRAF = null; }
+  }
+  /**
+   * Anima a "câmera" de (zoom,pan) atuais até um zoom alvo, CENTRALIZANDO o
+   * tabuleiro, ao longo de `dur` ms. Usado para, ao resolver, recuar devagar
+   * até 100% e revelar o laço inteiro. requestAnimationFrame + easeOutCubic.
+   */
+  function animaCamera(zAlvo, dur) {
+    if (!S.puzzle) return;
+    cancelAnimacaoCamera();
+    const r = $('scroll').getBoundingClientRect();
+    zAlvo = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zAlvo));
+    const z0 = S.zoom, px0 = S.panX, py0 = S.panY;
+    const pxA = (r.width - S.geo.w * zAlvo) / 2;     // pan alvo = centralizado
+    const pyA = (r.height - S.geo.h * zAlvo) / 2;
+    if (Math.abs(zAlvo - z0) < 1e-3 && Math.abs(pxA - px0) < 1 && Math.abs(pyA - py0) < 1) return;
+    const svg = $('tabuleiro'); if (svg) svg.style.transition = '';   // aqui animamos via rAF
+    let t0 = null;
+    const quadro = (t) => {
+      if (t0 === null) t0 = t;
+      let u = (t - t0) / dur; if (u > 1) u = 1;
+      const e = 1 - Math.pow(1 - u, 3);              // easeOutCubic (desacelera no fim)
+      S.zoom = z0 + (zAlvo - z0) * e;
+      S.panX = px0 + (pxA - px0) * e;
+      S.panY = py0 + (pyA - py0) * e;
+      aplicaView();
+      S.camRAF = u < 1 ? requestAnimationFrame(quadro) : null;
+    };
+    S.camRAF = requestAnimationFrame(quadro);
+  }
+
   // -------------------------------------------------- pan (arrastar a viewport)
   /**
    * Liga as formas de arrastar o tabuleiro dentro do contêiner .scroll:
@@ -209,6 +245,7 @@
     sc.addEventListener('mousedown', (e) => {
       if (e.button !== 1) return;
       e.preventDefault();                  // evita o autoscroll do botão do meio
+      cancelAnimacaoCamera();
       mid = { x: e.clientX, y: e.clientY, px: S.panX, py: S.panY };
       sc.classList.add('panning');
     });
@@ -238,6 +275,7 @@
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (ptrs.size === 2) {
         if (edgeAtivo) edgeAtivo.cancelar();       // cancela traço/marca do 1º dedo
+        cancelAnimacaoCamera();
         S.gesturing = true;
         const c = centroide(), r = sc.getBoundingClientRect();
         // ponto de conteúdo (não-escalado) sob o centróide no início do gesto
@@ -486,6 +524,7 @@
   function resolver() {
     if (!S.puzzle) return;
     if (S.anim) { stopSolve(); refresh(); return; }   // segundo clique: parar
+    cancelAnimacaoCamera();                            // se ainda recuava de uma vitória
     const p = S.puzzle;
     const modo = $('modoSolve').value;
     const solSet = new Set(p.solution);
@@ -539,7 +578,7 @@
       if (S.focoEl) S.focoEl.classList.remove('foco');
       if (st) {
         S.focoEl = S.edgeEls[st.key]; if (S.focoEl) S.focoEl.classList.add('foco');
-        seguirFoco(st.key);   // a câmera acompanha a aresta em foco
+        if (!S.won) seguirFoco(st.key);   // segue a aresta — mas, ao vencer, deixa a câmera recuar
       }
     }, delay);
   }
@@ -784,7 +823,9 @@
       t.setAttribute('class', 'dica' + (n > k ? ' excesso' : n === k ? ' ok' : ''));
     }
 
-    S.won = checkWin(der);
+    const ganhou = checkWin(der);
+    const venceuAgora = ganhou && !S.won;   // transição perdeu -> venceu (dispara só 1x)
+    S.won = ganhou;
     $('tabuleiro').classList.toggle('resolvido', S.won);
     if (S.won) setStatus('Resolvido! 🎉', 'vitoria');
     else setStatus('Tabuleiro ' + rows + '×' + cols + ' — ' + S.lines.size + ' arestas, ' + S.marks.size + ' marcas.');
@@ -792,6 +833,9 @@
     $('desfazer').disabled = !S.undo.length;
     $('refazer').disabled = !S.redo.length;
     $('limpar').disabled = !S.lines.size && !S.marks.size;
+
+    // ao resolver (jogador OU solver), recua devagar até 100% revelando o laço
+    if (venceuAgora) animaCamera(1, 1400);
   }
 
   // -------------------------------------------------- CSV
@@ -898,6 +942,7 @@
       if (e.ctrlKey) {                                  // Ctrl+roda = zoom no cursor
         setZoom(S.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
       } else if (S.puzzle) {                            // roda normal = pan (sem barras)
+        cancelAnimacaoCamera();
         if (e.shiftKey) S.panX -= e.deltaY; else { S.panX -= e.deltaX; S.panY -= e.deltaY; }
         aplicaView();
       }
@@ -912,6 +957,7 @@
       // setas: arrastam (pan) o tabuleiro; Shift = passo maior
       else if (!campo && e.key.indexOf('Arrow') === 0) {
         e.preventDefault();
+        cancelAnimacaoCamera();
         const step = e.shiftKey ? 220 : 70;
         if (e.key === 'ArrowUp') S.panY += step;
         else if (e.key === 'ArrowDown') S.panY -= step;
