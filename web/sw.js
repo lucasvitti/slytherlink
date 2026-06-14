@@ -11,7 +11,7 @@
  * com a de game.js e os ?v= do index.html — o novo nome de cache força a
  * reinstalação do shell.
  */
-const VERSION = '14';
+const VERSION = '15';
 const CACHE = 'slither-' + VERSION;
 
 const SHELL = [

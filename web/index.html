@@ -56,6 +56,11 @@
         <option value="deducao" selected>dedução</option>
         <option value="busca">busca real</option>
       </select>
+      <select id="velocidade" title="Velocidade da animação do solver">
+        <option value="lenta">Lenta</option>
+        <option value="normal" selected>Normal</option>
+        <option value="rapida">Rápida</option>
+      </select>
       <button id="desfazer" title="Desfazer (Ctrl+Z)">↶ Desfazer</button>
       <button id="refazer" title="Refazer (Ctrl+Y)">↷ Refazer</button>
       <button id="limpar" title="Limpar tudo">Limpar</button>
@@ -97,8 +102,8 @@
     <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
   </main>
 
-  <script src="js/core.js?v=14"></script>
-  <script src="js/game.js?v=14"></script>
+  <script src="js/core.js?v=15"></script>
+  <script src="js/game.js?v=15"></script>
   <script>
     // registra o service worker (PWA: instalável + offline)
     if ('serviceWorker' in navigator) {

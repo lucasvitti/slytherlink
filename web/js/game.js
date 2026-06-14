@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '14';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '15';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -454,22 +454,34 @@
     if (S.anim) { stopSolve(); refresh(); return; }   // segundo clique: parar
     const p = S.puzzle;
     const modo = $('modoSolve').value;
-    // 'deducao': avança sempre (usa a solução conhecida). 'busca': busca real,
-    // com palpites e backtracking (a partir só das dicas).
-    const trace = modo === 'busca'
-      ? SL.solveTraceBusca(p.rows, p.cols, p.clues)
-      : SL.solveTrace(p.rows, p.cols, p.clues, p.solution);
+    const solSet = new Set(p.solution);
 
-    // recomeça do zero (sem registrar como movimentos)
-    S.lines = new Set(); S.marks = new Set(); S.colors = {}; S.colorSeq = 0;
+    // CONTINUA do progresso do jogador: mantém só o que é consistente com a
+    // solução (traços ∈ solução, marcas ∉ solução) e descarta os erros, para o
+    // solver poder convergir. O tabuleiro NÃO é apagado.
+    const seedLines = [...S.lines].filter((k) => solSet.has(k));
+    const seedMarks = [...S.marks].filter((k) => !solSet.has(k));
+    S.lines = new Set(seedLines); S.marks = new Set(seedMarks);
+    S.colors = {}; S.colorSeq = 0;
     S.undo = []; S.redo = [];
     refresh();
+
+    // 'deducao': avança sempre (usa a solução). 'busca': busca real (palpites +
+    // backtracking). Ambos PARTEM do progresso do jogador (sementes).
+    const trace = modo === 'busca'
+      ? SL.solveTraceBusca(p.rows, p.cols, p.clues, undefined, undefined, seedLines, seedMarks)
+      : SL.solveTrace(p.rows, p.cols, p.clues, p.solution, seedLines, seedMarks);
+
     $('resolver').textContent = '⏸ Parar';
 
-    // anima em ~5 s, agrupando passos por quadro quando o trace é longo
-    const quadros = Math.min(trace.length, 360);
-    const porQuadro = Math.max(1, Math.ceil(trace.length / quadros));
-    const delay = Math.max(12, Math.min(50, Math.round(5200 / Math.max(1, quadros))));
+    // velocidade = ms por passo; agrupa passos p/ não passar de ~MAX_TOTAL
+    const dPasso = { lenta: 200, normal: 65, rapida: 16 }[$('velocidade').value] || 65;
+    const MAX_TOTAL = 20000;
+    let porQuadro = 1, delay = Math.max(12, dPasso);
+    if (trace.length * dPasso > MAX_TOTAL) {
+      delay = 16;
+      porQuadro = Math.max(1, Math.ceil(trace.length / (MAX_TOTAL / delay)));
+    }
     let i = 0;
     S.anim = setInterval(() => {
       if (i >= trace.length) {

@@ -1158,7 +1158,7 @@
    *   passos em ordem; `deduce` = forçado por regra, `guess` = aresta do laço
    *   colocada para destravar.
    */
-  function solveTrace(rows, cols, clues, solution) {
+  function solveTrace(rows, cols, clues, solution, seedLines, seedMarks) {
     const topo = buildTopology(rows, cols);
     const { nE, nDots, edgeEnds, dotEdges, edgeKey } = topo;
     const sol = new Set(solution);
@@ -1232,7 +1232,22 @@
       }
     }
 
-    // propagação inicial a partir das dicas
+    // semeia o estado inicial com o progresso do jogador (NÃO emite passos:
+    // essas arestas já estão na tela). Só semeia o que é consistente com a
+    // solução (o chamador filtra: linhas ∈ solução, marcas ∉ solução).
+    const semente = (k, val) => {
+      const e = topo.keyToIdx[k];
+      if (e == null || state[e] !== UNKNOWN) return;
+      state[e] = val;
+      const [v1, v2] = edgeEnds[e];
+      unkV[v1]--; unkV[v2]--;
+      for (const cel of edgeCells[e]) unkC[cel]--;
+      if (val === LINE) { placed++; inV[v1]++; inV[v2]++; for (const cel of edgeCells[e]) inC[cel]++; }
+    };
+    for (const k of (seedLines || [])) semente(k, LINE);
+    for (const k of (seedMarks || [])) semente(k, EMPTY);
+
+    // propagação inicial a partir das dicas (e das sementes)
     for (let cel = 0; cel < nCells; cel++) queue.push(cel);
     propagate();
 
@@ -1281,7 +1296,7 @@
    * @returns {Array<{key: string, val: 'line'|'empty'|'unset',
    *                  type: 'deduce'|'guess'|'backtrack'}>}  passos em ordem.
    */
-  function solveTraceBusca(rows, cols, clues, maxNodes, maxPassos) {
+  function solveTraceBusca(rows, cols, clues, maxNodes, maxPassos, seedLines, seedMarks) {
     maxNodes = maxNodes || 5000000;
     maxPassos = maxPassos || 8000;   // limita o tamanho do trace p/ animação
     const topo = buildTopology(rows, cols);
@@ -1481,9 +1496,16 @@
       }
     }
 
+    // semeia o progresso do jogador como estado FIXO (busca não o desfaz, pois
+    // fica abaixo do 1º marcador de backtracking). Esses passos são as próprias
+    // arestas do jogador, já na tela, então são cortados do trace devolvido.
+    for (const k of (seedLines || [])) { const e = topo.keyToIdx[k]; if (e != null && state[e] === UNKNOWN) setEdge(e, LINE, 'seed'); }
+    for (const k of (seedMarks || [])) { const e = topo.keyToIdx[k]; if (e != null && state[e] === UNKNOWN) setEdge(e, EMPTY, 'seed'); }
+    const nSemente = trace.length;
+
     for (let cel = 0; cel < nCells; cel++) fila.push(cel);
-    if (propaga()) busca();
-    return trace;
+    if (!done && propaga()) busca();
+    return trace.slice(nSemente);
   }
 
   // API pública do módulo.
