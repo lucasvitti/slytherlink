@@ -61,8 +61,16 @@
 
   <main>
     <div id="palco" class="palco">
-      <svg id="tabuleiro" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div id="scroll" class="scroll">
+        <svg id="tabuleiro" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
       <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
+    </div>
+    <div class="zoombar">
+      <button id="zoomOut" title="Diminuir (Ctrl -)">−</button>
+      <span id="zoomPct">100%</span>
+      <button id="zoomIn" title="Aumentar (Ctrl +)">+</button>
+      <button id="zoomFit" title="Ajustar à tela (Ctrl 0)">Ajustar</button>
     </div>
     <div id="status" class="status"></div>
   </main>
@@ -73,7 +81,7 @@
     ao unir dois, prevalece a cor do maior. <span id="infoPuzzle"></span>
   </footer>
 
-  <script src="js/core.js?v=9"></script>
-  <script src="js/game.js?v=9"></script>
+  <script src="js/core.js?v=10"></script>
+  <script src="js/game.js?v=10"></script>
 </body>
 </html>

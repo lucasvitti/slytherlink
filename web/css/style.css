@@ -64,7 +64,19 @@ main { display: flex; flex-direction: column; align-items: center; padding: 26px
 .palco { position: relative; background: var(--panel); border: 1px solid var(--border);
   border-radius: 16px; padding: 16px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
 
-svg { display: block; touch-action: none; -webkit-user-select: none; user-select: none; }
+/* área rolável: o tabuleiro pode passar da viewport quando ampliado */
+.scroll { overflow: auto; max-width: min(88vw, 900px); max-height: 74vh;
+  overscroll-behavior: contain; }
+
+svg { display: block; margin: 0 auto; touch-action: none;
+  -webkit-user-select: none; user-select: none; }
+
+/* barra de zoom abaixo do tabuleiro */
+.zoombar { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.zoombar button { padding: 4px 12px; min-width: 34px; font-size: 16px; line-height: 1; }
+.zoombar #zoomFit { font-size: 13px; }
+#zoomPct { min-width: 48px; text-align: center; font-size: 13px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
 
 /* arestas */
 .aresta { fill: none; stroke-linecap: round; pointer-events: none; }

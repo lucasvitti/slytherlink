@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '9';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '10';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -41,6 +41,7 @@
     undo: [], redo: [],   // pilhas de movimentos (cada item = { changes })
     edgeEls: {}, markEls: {}, clueEls: null,   // refs dos elementos SVG
     geo: null, won: false,                     // geometria e flag de vitória
+    zoom: 1,                    // fator de zoom do tabuleiro (1 = tamanho base)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
   };
 
@@ -91,6 +92,56 @@
   const dx = (c) => S.geo.pad + c * S.geo.gap;
   const dy = (r) => S.geo.pad + r * S.geo.gap;
 
+  // -------------------------------------------------- zoom
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 5;
+
+  /**
+   * Aplica o zoom atual. O viewBox (coordenadas lógicas) fica fixo; só o
+   * tamanho RENDERIZADO do SVG muda — então o desenho continua nítido (vetor)
+   * e o contêiner .scroll mostra barras de rolagem quando o tabuleiro
+   * ultrapassa a viewport.
+   */
+  function aplicaZoom() {
+    const svg = $('tabuleiro');
+    svg.setAttribute('width', Math.round(S.geo.w * S.zoom));
+    svg.setAttribute('height', Math.round(S.geo.h * S.zoom));
+    const pct = $('zoomPct');
+    if (pct) pct.textContent = Math.round(S.zoom * 100) + '%';
+  }
+
+  /**
+   * Ajusta o zoom mantendo fixo o ponto do tabuleiro sob (ax,ay) em pixels de
+   * tela (padrão: centro da viewport de rolagem). Recoloca a rolagem para que
+   * o ponto ancorado não escorregue ao ampliar/reduzir.
+   */
+  function setZoom(z, ax, ay) {
+    if (!S.puzzle) return;
+    const sc = $('scroll');
+    const r = sc.getBoundingClientRect();
+    if (ax == null) { ax = r.left + r.width / 2; ay = r.top + r.height / 2; }
+    z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    const old = S.zoom;
+    if (Math.abs(z - old) < 1e-4) return;
+    // coordenada de conteúdo (não-escalada) sob a âncora
+    const cx = (sc.scrollLeft + (ax - r.left)) / old;
+    const cy = (sc.scrollTop + (ay - r.top)) / old;
+    S.zoom = z;
+    aplicaZoom();
+    sc.scrollLeft = cx * z - (ax - r.left);
+    sc.scrollTop = cy * z - (ay - r.top);
+  }
+
+  // Ajusta o zoom para o tabuleiro inteiro caber na viewport de rolagem.
+  function zoomFit() {
+    if (!S.puzzle) return;
+    const sc = $('scroll');
+    const r = sc.getBoundingClientRect();
+    const z = Math.min(r.width / S.geo.w, r.height / S.geo.h) * 0.97;
+    S.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    aplicaZoom();
+    sc.scrollLeft = 0; sc.scrollTop = 0;
+  }
+
   // -------------------------------------------------- geração
   /**
    * Lê os controles da UI, normaliza os parâmetros e dispara a geração do
@@ -133,6 +184,7 @@
     S.lines = new Set(); S.marks = new Set(); S.colors = {}; S.colorSeq = 0;
     S.undo = []; S.redo = []; S.won = false;
     S.geo = computeGeo(p.rows, p.cols);
+    S.zoom = 1;
     buildSvg(); refresh();
     setStatus('Tabuleiro ' + p.rows + '×' + p.cols + ' — dificuldade ' + p.dificuldade + '.');
     const metodoTxt = (p.metodo && p.dificuldade !== 'nenhuma') ? ' · ' + p.metodo : '';
@@ -150,8 +202,8 @@
     const svg = $('tabuleiro');
     svg.classList.remove('resolvido');
     while (svg.firstChild) svg.removeChild(svg.firstChild);
-    svg.setAttribute('width', S.geo.w); svg.setAttribute('height', S.geo.h);
     svg.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
+    aplicaZoom();   // define width/height = geometria × zoom (viewBox fixo)
     S.edgeEls = {}; S.markEls = {};
 
     const { rows, cols, clues } = S.puzzle;
@@ -625,9 +677,21 @@
       reader.onload = () => importCsv(String(reader.result));
       reader.readAsText(file); e.target.value = '';
     });
+    // zoom: botões, Ctrl+roda (ancorado no cursor) e teclado
+    $('zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
+    $('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
+    $('zoomFit').addEventListener('click', zoomFit);
+    $('scroll').addEventListener('wheel', (e) => {
+      if (!e.ctrlKey) return;                 // roda normal = rolagem
+      e.preventDefault();
+      setZoom(S.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+    }, { passive: false });
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
       else if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+      else if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); }
+      else if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); }
+      else if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); }
     });
     gerar();
   }
@@ -638,6 +702,7 @@
     state: S,
     solve() { S.lines = new Set(S.puzzle.solution); S.marks = new Set(); S.undo = []; S.redo = []; S.colors = {}; refresh(); return S.won; },
     toggleLine, toggleMark, undo, redo, limpar, refresh, exportCsv, importCsv,
+    setZoom, zoomFit,
   };
 
   // inicializa assim que o DOM estiver pronto
