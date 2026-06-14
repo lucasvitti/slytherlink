@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '17';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '19';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -47,6 +47,7 @@
     slots: [null, null, null, null, null],  // 5 checkpoints (estados salvos)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
     camRAF: null,               // rAF da câmera animada (recuo até 100% ao vencer)
+    miniEls: null,              // refs do minimapa { board, lines, visor }
   };
 
   // Web Worker preguiçoso: criado na 1ª geração e reaproveitado.
@@ -88,7 +89,10 @@
     const gap = Math.max(15, Math.min(58, Math.floor(max / Math.max(rows, cols))));
     const pad = Math.max(16, Math.round(gap * 0.7));
     return { pad, gap, w: pad * 2 + cols * gap, h: pad * 2 + rows * gap,
-             fonte: Math.max(8, Math.min(18, Math.round(gap * 0.46))),
+             // fonte das dicas PROPORCIONAL à célula (≈52% do passo): preenche a
+             // caixa na mesma proporção em qualquer tamanho. Em unidades do
+             // viewBox, então escala junto com o zoom automaticamente.
+             fonte: Math.max(7, +(gap * 0.52).toFixed(1)),
              mx: Math.max(2.5, Math.round(gap * 0.16)),
              raio: Math.max(1.3, +(gap * 0.06).toFixed(1)) };
   }
@@ -114,6 +118,7 @@
     svg.style.transform = 'translate(' + Math.round(S.panX) + 'px,' + Math.round(S.panY) + 'px)';
     const pct = $('zoomPct');
     if (pct) pct.textContent = Math.round(S.zoom * 100) + '%';
+    atualizaVisor();   // mantém o retângulo do minimapa em sincronia com a câmera
   }
 
   // Centraliza o tabuleiro no palco (ao gerar e no "Ajustar").
@@ -230,6 +235,105 @@
     S.camRAF = requestAnimationFrame(quadro);
   }
 
+  // -------------------------------------------------- minimapa ("mapa")
+  /**
+   * (Re)cria o SVG do minimapa para o tabuleiro atual: usa o MESMO viewBox do
+   * tabuleiro (coords do board), então arestas e visor são desenhados direto em
+   * coordenadas do board. Mostra só o fundo + as arestas traçadas (sem dicas).
+   */
+  function montaMinimapa() {
+    const mini = $('miniSvg');
+    while (mini.firstChild) mini.removeChild(mini.firstChild);
+    const MAX = 168;                                   // maior lado do mapa, em px
+    const s = MAX / Math.max(S.geo.w, S.geo.h);
+    mini.setAttribute('width', Math.round(S.geo.w * s));
+    mini.setAttribute('height', Math.round(S.geo.h * s));
+    mini.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
+    const board = document.createElementNS(SVGNS, 'rect');
+    board.setAttribute('x', 0); board.setAttribute('y', 0);
+    board.setAttribute('width', S.geo.w); board.setAttribute('height', S.geo.h);
+    board.setAttribute('class', 'mini-board');
+    const lines = document.createElementNS(SVGNS, 'path');
+    lines.setAttribute('class', 'mini-lines');
+    lines.setAttribute('vector-effect', 'non-scaling-stroke');   // traço fino constante
+    const visor = document.createElementNS(SVGNS, 'rect');
+    visor.setAttribute('class', 'mini-visor');
+    visor.setAttribute('vector-effect', 'non-scaling-stroke');
+    mini.appendChild(board); mini.appendChild(lines); mini.appendChild(visor);
+    S.miniEls = { board, lines, visor };
+  }
+  // redesenha as arestas traçadas no minimapa (a partir de S.lines)
+  function desenhaLinhasMini() {
+    if (!S.miniEls || $('minimap').classList.contains('oculto')) return;
+    let d = '';
+    for (const key of S.lines) {
+      const dots = edgeDots(key);
+      d += 'M' + dx(dots[0][1]) + ',' + dy(dots[0][0]) + 'L' + dx(dots[1][1]) + ',' + dy(dots[1][0]);
+    }
+    S.miniEls.lines.setAttribute('d', d);
+  }
+  /**
+   * Atualiza o retângulo "visor" (região visível) no minimapa e mostra/oculta o
+   * mapa: ele só aparece quando o tabuleiro EXCEDE o palco (faz sentido navegar).
+   */
+  function atualizaVisor() {
+    const mm = $('minimap');
+    if (!S.puzzle || !S.miniEls) { return; }
+    const r = $('scroll').getBoundingClientRect();
+    const W = S.geo.w * S.zoom, H = S.geo.h * S.zoom;
+    const precisa = W > r.width + 2 || H > r.height + 2;
+    const estavaOculto = mm.classList.contains('oculto');
+    mm.classList.toggle('oculto', !precisa);
+    if (!precisa) return;
+    const visor = S.miniEls.visor;
+    visor.setAttribute('x', -S.panX / S.zoom);
+    visor.setAttribute('y', -S.panY / S.zoom);
+    visor.setAttribute('width', r.width / S.zoom);
+    visor.setAttribute('height', r.height / S.zoom);
+    if (estavaOculto) desenhaLinhasMini();             // acabou de aparecer: sincroniza
+  }
+  /**
+   * Liga as interações do minimapa: arrastar o "grip" reposiciona o painel;
+   * arrastar/clicar no corpo do mapa reposiciona a câmera (pan) do tabuleiro.
+   * Usa pointer events, então funciona com mouse e toque.
+   */
+  function setupMinimapa() {
+    const mm = $('minimap'), grip = mm.querySelector('.mini-grip'), mini = $('miniSvg');
+    let movePainel = null, navega = false;
+    // arrastar o ponto clicado no mapa -> centraliza a câmera nele
+    const navegar = (e) => {
+      const r = mini.getBoundingClientRect();
+      if (!r.width || !S.puzzle) return;                     // mapa oculto/sem tabuleiro
+      cancelAnimacaoCamera();
+      const bx = (e.clientX - r.left) / r.width * S.geo.w;   // ponto em coords do board
+      const by = (e.clientY - r.top) / r.height * S.geo.h;
+      const sc = $('scroll').getBoundingClientRect();
+      S.panX = sc.width / 2 - bx * S.zoom;                   // centraliza o ponto clicado
+      S.panY = sc.height / 2 - by * S.zoom;
+      aplicaView();
+    };
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const r = mm.getBoundingClientRect();
+      movePainel = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    });
+    mini.addEventListener('pointerdown', (e) => { e.preventDefault(); navega = true; navegar(e); });
+    // move/up no WINDOW (como o pan do botão do meio): segue o ponteiro mesmo
+    // fora do painel, sem depender de setPointerCapture.
+    window.addEventListener('pointermove', (e) => {
+      if (movePainel) {
+        const pr = $('palco').getBoundingClientRect();
+        let x = e.clientX - pr.left - movePainel.dx, y = e.clientY - pr.top - movePainel.dy;
+        x = Math.max(0, Math.min(pr.width - mm.offsetWidth, x));
+        y = Math.max(0, Math.min(pr.height - mm.offsetHeight, y));
+        mm.style.left = x + 'px'; mm.style.top = y + 'px'; mm.style.right = 'auto';
+      } else if (navega) { navegar(e); }
+    });
+    const solta = () => { movePainel = null; navega = false; };
+    window.addEventListener('pointerup', solta);
+    window.addEventListener('pointercancel', solta);
+  }
+
   // -------------------------------------------------- pan (arrastar a viewport)
   /**
    * Liga as formas de arrastar o tabuleiro dentro do contêiner .scroll:
@@ -314,10 +418,11 @@
   function gerar() {
     stopSolve();
     const dificuldade = $('dificuldade').value;
-    // 'nenhuma' não reduz dicas (geração barata), então libera tabuleiros
-    // grandes; as demais ficam limitadas (a redução é cara). O teto alto em
-    // 'nenhuma' é só uma proteção contra travar o navegador na renderização.
-    const maxDim = dificuldade === 'nenhuma' ? 100 : 30;
+    // 'nenhuma' não reduz dicas (geração barata), então libera tabuleiros bem
+    // grandes; as demais ficam mais limitadas porque a redução de dicas é cara.
+    // Os tetos são só proteção contra travar o navegador (render/redução) —
+    // ainda assim, tabuleiros enormes podem demorar para desenhar.
+    const maxDim = dificuldade === 'nenhuma' ? 400 : 80;
     const clamp = (v) => Math.max(3, Math.min(maxDim, Math.round(v) || 7));
     const rows = clamp(+$('linhas').value), cols = clamp(+$('colunas').value);
     $('linhas').value = rows; $('colunas').value = cols;
@@ -370,6 +475,7 @@
     svg.classList.remove('resolvido');
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     svg.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
+    montaMinimapa();   // (re)cria o minimapa p/ a geometria atual
     aplicaView();   // define width/height (zoom) + translate (pan)
     S.edgeEls = {}; S.markEls = {};
 
@@ -547,8 +653,10 @@
 
     $('resolver').textContent = '⏸ Parar';
 
-    // velocidade = ms por passo; agrupa passos p/ não passar de ~MAX_TOTAL
-    const dPasso = { lenta: 200, normal: 65, rapida: 16 }[$('velocidade').value] || 65;
+    // velocidade = passos por segundo (slider numérico) -> ms por passo;
+    // agrupa passos p/ não passar de ~MAX_TOTAL ms no total
+    const sps = Math.max(2, +$('velocidade').value || 15);
+    const dPasso = Math.max(4, Math.round(1000 / sps));
     const MAX_TOTAL = 20000;
     let porQuadro = 1, delay = Math.max(12, dPasso);
     if (trace.length * dPasso > MAX_TOTAL) {
@@ -556,7 +664,8 @@
       porQuadro = Math.max(1, Math.ceil(trace.length / (MAX_TOTAL / delay)));
     }
     // câmera que segue o solver: transition no transform p/ o pan deslizar
-    const durCam = { lenta: 700, normal: 450, rapida: 300 }[$('velocidade').value] || 450;
+    // (quanto mais rápido o solver, mais curto o deslize)
+    const durCam = Math.min(700, Math.max(250, dPasso * 4));
     $('tabuleiro').style.transition = 'transform ' + durCam + 'ms ease-out';
     let i = 0;
     S.anim = setInterval(() => {
@@ -834,6 +943,8 @@
     $('refazer').disabled = !S.redo.length;
     $('limpar').disabled = !S.lines.size && !S.marks.size;
 
+    desenhaLinhasMini();   // espelha as arestas traçadas no minimapa
+
     // ao resolver (jogador OU solver), recua devagar até 100% revelando o laço
     if (venceuAgora) animaCamera(1, 1400);
   }
@@ -933,6 +1044,11 @@
     $('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
     $('zoomFit').addEventListener('click', zoomFit);
     $('toggleTop').addEventListener('click', toggleTopbar);
+    setupMinimapa();
+    // leitura ao vivo da velocidade (passos por segundo)
+    const vel = $('velocidade'), velVal = $('velVal');
+    const mostraVel = () => { velVal.textContent = vel.value + '/s'; };
+    vel.addEventListener('input', mostraVel); mostraVel();
     let rt; window.addEventListener('resize', () => {
       clearTimeout(rt); rt = setTimeout(() => { if (S.puzzle) centraliza(); }, 150);
     });

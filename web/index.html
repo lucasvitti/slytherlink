@@ -71,11 +71,10 @@
         <option value="deducao" selected>dedução</option>
         <option value="busca">busca real</option>
       </select>
-      <select id="velocidade" title="Velocidade da animação do solver">
-        <option value="lenta">Lenta</option>
-        <option value="normal" selected>Normal</option>
-        <option value="rapida">Rápida</option>
-      </select>
+      <label class="vel" title="Velocidade da animação do solver (passos por segundo)">
+        <span>Velocidade <b id="velVal">15/s</b></span>
+        <input id="velocidade" type="range" min="2" max="120" step="1" value="15" />
+      </label>
       <button id="desfazer" title="Desfazer (Ctrl+Z)">↶ Desfazer</button>
       <button id="refazer" title="Refazer (Ctrl+Y)">↷ Refazer</button>
       <button id="limpar" title="Limpar tudo">Limpar</button>
@@ -97,6 +96,11 @@
 
     <div id="status" class="status floating-top"></div>
 
+    <div id="minimap" class="minimap oculto">
+      <div class="mini-grip" title="Arraste para mover o mapa">⠿</div>
+      <svg id="miniSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
     <div class="checkpoints floating-bl" title="Salve até 5 estados do tabuleiro e volte a eles">
       <span class="ckgroup">Salvar:
         <button data-save="0">1</button><button data-save="1">2</button><button data-save="2">3</button><button data-save="3">4</button><button data-save="4">5</button>
@@ -117,8 +121,8 @@
     <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
   </main>
 
-  <script src="js/core.js?v=17"></script>
-  <script src="js/game.js?v=17"></script>
+  <script src="js/core.js?v=19"></script>
+  <script src="js/game.js?v=19"></script>
   <script>
     // registra o service worker (PWA: instalável + offline)
     if ('serviceWorker' in navigator) {
