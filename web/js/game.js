@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '10';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '11';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -42,6 +42,7 @@
     edgeEls: {}, markEls: {}, clueEls: null,   // refs dos elementos SVG
     geo: null, won: false,                     // geometria e flag de vitória
     zoom: 1,                    // fator de zoom do tabuleiro (1 = tamanho base)
+    gesturing: false,           // true durante pan/pinça multitoque (suspende o traço)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
   };
 
@@ -140,6 +141,79 @@
     S.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
     aplicaZoom();
     sc.scrollLeft = 0; sc.scrollTop = 0;
+  }
+
+  // -------------------------------------------------- pan (arrastar a viewport)
+  /**
+   * Liga as formas de arrastar o tabuleiro dentro do contêiner .scroll:
+   *  - desktop: arrastar com o botão do MEIO do mouse;
+   *  - mobile:  dois dedos arrastam (pan) e pinçam (zoom) ao mesmo tempo.
+   * (rolagem normal: roda do mouse / barras; teclado: setas — ver init.)
+   */
+  function setupPan() {
+    const sc = $('scroll');
+
+    // --- botão do meio do mouse ---
+    let mid = null;
+    sc.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();                  // evita o autoscroll do botão do meio
+      mid = { x: e.clientX, y: e.clientY, sl: sc.scrollLeft, st: sc.scrollTop };
+      sc.classList.add('panning');
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!mid) return;
+      sc.scrollLeft = mid.sl - (e.clientX - mid.x);
+      sc.scrollTop = mid.st - (e.clientY - mid.y);
+    });
+    window.addEventListener('mouseup', () => {
+      if (mid) { mid = null; sc.classList.remove('panning'); }
+    });
+
+    // --- dois dedos: pan + pinça (mobile) ---
+    const ptrs = new Map();   // pointerId -> {x,y} (apenas toques)
+    let g = null;             // estado do gesto enquanto há 2 dedos
+    const centroide = () => {
+      const a = [...ptrs.values()];
+      return {
+        x: (a[0].x + a[1].x) / 2,
+        y: (a[0].y + a[1].y) / 2,
+        d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1,
+      };
+    };
+    sc.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch') return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (ptrs.size === 2) {
+        if (edgeAtivo) edgeAtivo.cancelar();       // cancela traço/marca do 1º dedo
+        S.gesturing = true;
+        const c = centroide(), r = sc.getBoundingClientRect();
+        // ponto de conteúdo (não-escalado) sob o centróide no início do gesto
+        g = { d0: c.d, z0: S.zoom,
+              cx: (sc.scrollLeft + (c.x - r.left)) / S.zoom,
+              cy: (sc.scrollTop + (c.y - r.top)) / S.zoom };
+      }
+    });
+    sc.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'touch' || !ptrs.has(e.pointerId)) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!g || ptrs.size < 2) return;
+      e.preventDefault();
+      const c = centroide(), r = sc.getBoundingClientRect();
+      const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, g.z0 * (c.d / g.d0)));
+      S.zoom = z;
+      aplicaZoom();
+      // mantém o ponto de conteúdo ancorado sob o centróide atual (pan + zoom)
+      sc.scrollLeft = g.cx * z - (c.x - r.left);
+      sc.scrollTop = g.cy * z - (c.y - r.top);
+    }, { passive: false });
+    const fimToque = (e) => {
+      if (e.pointerType !== 'touch') return;
+      ptrs.delete(e.pointerId);
+      if (ptrs.size < 2 && g) { g = null; S.gesturing = false; }
+    };
+    sc.addEventListener('pointerup', fimToque);
+    sc.addEventListener('pointercancel', fimToque);
   }
 
   // -------------------------------------------------- geração
@@ -267,15 +341,28 @@
    * @param {SVGElement} el  a linha "hit" que captura o ponteiro.
    * @param {string} key  chave da aresta.
    */
+  // interação de aresta em andamento (global: no máximo uma por vez). Permite
+  // que o início de um gesto multitoque/pan cancele o traço/marca pendente.
+  let edgeAtivo = null;
+
   function bindEdgePointer(el, key) {
     let timer = null, fired = false;
+    const limpaTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
     const down = (ev) => {
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;  // só botão esquerdo
+      if (S.gesturing) return;                  // gesto multitoque em andamento
+      if (edgeAtivo) { edgeAtivo.cancelar(); return; }  // 2º dedo: vira gesto, não traça
       ev.preventDefault();
       fired = false;
+      edgeAtivo = { cancelar: () => { limpaTimer(); fired = true; edgeAtivo = null; } };
       timer = setTimeout(() => { fired = true; toggleMark(key); }, HOLD_MS);
     };
-    const up = () => { if (timer) { clearTimeout(timer); timer = null; } if (!fired) toggleLine(key); };
-    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } fired = false; };
+    const up = () => {
+      limpaTimer();
+      if (!fired && !S.gesturing) toggleLine(key);
+      edgeAtivo = null;
+    };
+    const cancel = () => { limpaTimer(); fired = false; edgeAtivo = null; };
     el.addEventListener('pointerdown', down);
     el.addEventListener('pointerup', up);
     el.addEventListener('pointerleave', cancel);
@@ -681,17 +768,28 @@
     $('zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
     $('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
     $('zoomFit').addEventListener('click', zoomFit);
+    setupPan();
     $('scroll').addEventListener('wheel', (e) => {
       if (!e.ctrlKey) return;                 // roda normal = rolagem
       e.preventDefault();
       setZoom(S.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
     }, { passive: false });
     document.addEventListener('keydown', (e) => {
+      const campo = /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '');
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
       else if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
       else if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); }
       else if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); }
       else if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); }
+      // setas: arrastam (rolam) o tabuleiro; Shift = passo maior
+      else if (!campo && e.key.indexOf('Arrow') === 0) {
+        e.preventDefault();
+        const sc = $('scroll'), step = e.shiftKey ? 220 : 70;
+        if (e.key === 'ArrowUp') sc.scrollTop -= step;
+        else if (e.key === 'ArrowDown') sc.scrollTop += step;
+        else if (e.key === 'ArrowLeft') sc.scrollLeft -= step;
+        else if (e.key === 'ArrowRight') sc.scrollLeft += step;
+      }
     });
     gerar();
   }
