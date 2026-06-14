@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slitherlink</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Slitherlink</div>
+
+    <div class="group">
+      <label>Linhas
+        <input id="linhas" type="number" min="3" value="7" />
+      </label>
+      <label>Colunas
+        <input id="colunas" type="number" min="3" value="7" />
+      </label>
+      <label>Semente
+        <input id="semente" type="text" value="slither" size="8" placeholder="(aleatória)" />
+      </label>
+      <label class="check" title="Sempre gerar com semente aleatória">
+        <input id="aleatorio" type="checkbox" /> aleatória
+      </label>
+      <label>Dificuldade
+        <select id="dificuldade">
+          <option value="nenhuma">Nenhuma (todas as dicas)</option>
+          <option value="facil">Fácil</option>
+          <option value="medio" selected>Médio</option>
+          <option value="dificil">Difícil</option>
+        </select>
+      </label>
+      <label>Método
+        <select id="metodo" title="Algoritmo de redução de dicas">
+          <option value="guloso" selected>Guloso (mínimo)</option>
+          <option value="binaria">Busca binária (rápido)</option>
+          <option value="cegar">CEGAR (menos dicas)</option>
+        </select>
+      </label>
+      <button id="gerar" class="primary">Gerar tabuleiro</button>
+    </div>
+
+    <div class="group">
+      <button id="resolver" title="Resolver com animação">▶ Resolver</button>
+      <select id="modoSolve" title="Como o solver resolve">
+        <option value="deducao" selected>dedução</option>
+        <option value="busca">busca real</option>
+      </select>
+      <button id="desfazer" title="Desfazer (Ctrl+Z)">↶ Desfazer</button>
+      <button id="refazer" title="Refazer (Ctrl+Y)">↷ Refazer</button>
+      <button id="limpar" title="Limpar tudo">Limpar</button>
+    </div>
+
+    <div class="group">
+      <button id="exportar">Exportar CSV</button>
+      <button id="importar">Importar CSV</button>
+      <input id="arquivo" type="file" accept=".csv" hidden />
+    </div>
+  </header>
+
+  <main>
+    <div id="palco" class="palco">
+      <svg id="tabuleiro" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
+    </div>
+    <div id="status" class="status"></div>
+  </main>
+
+  <footer class="rodape">
+    Clique numa aresta para traçar (clique de novo para apagar);
+    clique-e-segure para marcar como inviável (×). Cada segmento tem uma cor;
+    ao unir dois, prevalece a cor do maior. <span id="infoPuzzle"></span>
+  </footer>
+
+  <script src="js/core.js?v=9"></script>
+  <script src="js/game.js?v=9"></script>
+</body>
+</html>

@@ -1,0 +1,646 @@
+/*
+ * game.js — UI jogável do Slitherlink (tema escuro, segmentos coloridos).
+ *
+ * Camada de apresentação/interação sobre o motor de core.js (objeto global SL).
+ * Renderiza o tabuleiro em SVG, trata o clique nas arestas, deriva o estado
+ * visual (proibições, erros, vitória) e anima o solucionador.
+ *
+ * Interação:
+ *   - clique curto numa aresta: traça / apaga a linha
+ *   - clique-e-segura: marca / desmarca a aresta como inviável (×) pelo jogador
+ *   - arestas da grade são pontilhadas; as inviáveis (checagem automática)
+ *     ficam ainda mais fracas
+ *   - cada segmento conectado tem uma cor; ao unir dois segmentos, a cor do
+ *     segmento MAIOR prevalece
+ *
+ * Estado global em S (ver abaixo). A geração roda num Web Worker (worker.js)
+ * para não travar a thread da UI.
+ *
+ * Identificação das arestas (UI e CSV): "H:r:c" liga (r,c)-(r,c+1);
+ * "V:r:c" liga (r,c)-(r+1,c).
+ */
+(function () {
+  'use strict';
+
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
+  const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
+  const VERSION = '9';   // bump quando core.js/worker.js mudarem (cache-busting)
+
+  // paleta de cores dos segmentos (vivas, sobre fundo escuro)
+  const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
+    '#ff8c42', '#ff5d73', '#9d7bff', '#7bd645', '#5ad1ff', '#ff6ec7', '#c0e84a'];
+
+  // Estado global da UI.
+  const S = {
+    puzzle: null,         // puzzle atual (saída de SL.generatePuzzle / CSV)
+    lines: new Set(),     // arestas traçadas
+    marks: new Set(),     // arestas marcadas como inviáveis pelo jogador (×)
+    colors: {},           // chave de aresta -> cor (persistente p/ regra do maior)
+    colorSeq: 0,          // contador p/ gerar cores extras quando a paleta acaba
+    undo: [], redo: [],   // pilhas de movimentos (cada item = { changes })
+    edgeEls: {}, markEls: {}, clueEls: null,   // refs dos elementos SVG
+    geo: null, won: false,                     // geometria e flag de vitória
+    anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
+  };
+
+  // Web Worker preguiçoso: criado na 1ª geração e reaproveitado.
+  let worker = null;
+  function getWorker() {
+    if (!worker) {
+      worker = new Worker('js/worker.js?v=' + VERSION);
+      worker.onmessage = (e) => onGenerated(e.data);
+    }
+    return worker;
+  }
+
+  // -------------------------------------------------- chaves / topologia
+  // Espelham as convenções de core.js, mas para uso da UI.
+  const hKey = (r, c) => 'H:' + r + ':' + c;
+  const vKey = (r, c) => 'V:' + r + ':' + c;
+  // decompõe "H:r:c" -> { t:'H', r, c }
+  const parseKey = (k) => { const p = k.split(':'); return { t: p[0], r: +p[1], c: +p[2] }; };
+  // os 2 pontos extremos de uma aresta
+  function edgeDots(k) {
+    const { t, r, c } = parseKey(k);
+    return t === 'H' ? [[r, c], [r, c + 1]] : [[r, c], [r + 1, c]];
+  }
+  // as (até 2) células que tocam uma aresta (algumas podem ficar fora do tabuleiro)
+  function edgeCells(k) {
+    const { t, r, c } = parseKey(k);
+    return t === 'H' ? [[r - 1, c], [r, c]] : [[r, c - 1], [r, c]];
+  }
+
+  // -------------------------------------------------- geometria
+  /**
+   * Calcula as medidas do desenho a partir do tamanho do tabuleiro e da
+   * largura da janela: passo da grade (gap), margem (pad), tamanho da tela
+   * (w/h), fonte das dicas, tamanho do × (mx) e raio dos pontos.
+   * @returns {object} geometria usada por dx/dy e pela renderização.
+   */
+  function computeGeo(rows, cols) {
+    const max = Math.min(820, window.innerWidth - 80);
+    const gap = Math.max(15, Math.min(58, Math.floor(max / Math.max(rows, cols))));
+    const pad = Math.max(16, Math.round(gap * 0.7));
+    return { pad, gap, w: pad * 2 + cols * gap, h: pad * 2 + rows * gap,
+             fonte: Math.max(8, Math.min(18, Math.round(gap * 0.46))),
+             mx: Math.max(2.5, Math.round(gap * 0.16)),
+             raio: Math.max(1.3, +(gap * 0.06).toFixed(1)) };
+  }
+  // coordenadas em pixel do ponto (r,c)
+  const dx = (c) => S.geo.pad + c * S.geo.gap;
+  const dy = (r) => S.geo.pad + r * S.geo.gap;
+
+  // -------------------------------------------------- geração
+  /**
+   * Lê os controles da UI, normaliza os parâmetros e dispara a geração do
+   * puzzle no Web Worker (a resposta chega em onGenerated).
+   */
+  function gerar() {
+    stopSolve();
+    const dificuldade = $('dificuldade').value;
+    // 'nenhuma' não reduz dicas (geração barata), então libera tabuleiros
+    // grandes; as demais ficam limitadas (a redução é cara). O teto alto em
+    // 'nenhuma' é só uma proteção contra travar o navegador na renderização.
+    const maxDim = dificuldade === 'nenhuma' ? 100 : 30;
+    const clamp = (v) => Math.max(3, Math.min(maxDim, Math.round(v) || 7));
+    const rows = clamp(+$('linhas').value), cols = clamp(+$('colunas').value);
+    $('linhas').value = rows; $('colunas').value = cols;
+    let seed = $('semente').value.trim();
+    // checkbox "aleatória": sempre sorteia uma semente nova (e a mostra no campo)
+    if ($('aleatorio').checked || !seed) {
+      seed = Math.random().toString(36).slice(2, 8);
+      $('semente').value = seed;
+    }
+    const metodo = $('metodo').value;
+    showOverlay('Gerando…');
+    getWorker().postMessage({ rows, cols, seed, dificuldade, metodo });
+  }
+  // callback do worker: trata erro ou instala o puzzle gerado
+  function onGenerated(msg) {
+    hideOverlay();
+    if (!msg.ok) { setStatus('Falha ao gerar: ' + msg.error, 'aviso'); return; }
+    setPuzzle(msg.puzzle);
+  }
+  /**
+   * Instala um puzzle (gerado ou importado): zera o estado de jogo, recalcula a
+   * geometria, (re)constrói o SVG, renderiza e atualiza as legendas de status.
+   * @param {object} p  puzzle no formato de SL.generatePuzzle.
+   */
+  function setPuzzle(p) {
+    stopSolve();
+    S.puzzle = p;
+    S.lines = new Set(); S.marks = new Set(); S.colors = {}; S.colorSeq = 0;
+    S.undo = []; S.redo = []; S.won = false;
+    S.geo = computeGeo(p.rows, p.cols);
+    buildSvg(); refresh();
+    setStatus('Tabuleiro ' + p.rows + '×' + p.cols + ' — dificuldade ' + p.dificuldade + '.');
+    const metodoTxt = (p.metodo && p.dificuldade !== 'nenhuma') ? ' · ' + p.metodo : '';
+    const tempoTxt = (p.ms != null) ? ' · ' + p.ms + ' ms' : '';
+    $('infoPuzzle').textContent = 'Semente “' + p.seed + '”, ' + p.nClues + ' dicas' + metodoTxt + tempoTxt + '.';
+  }
+
+  // -------------------------------------------------- SVG
+  /**
+   * Constrói do zero o SVG do tabuleiro: textos das dicas, todas as arestas
+   * (cada uma com uma linha "hit" invisível p/ clique, a linha visível e um ×
+   * oculto) e os pontos. Guarda as refs em S.edgeEls / S.markEls / S.clueEls.
+   */
+  function buildSvg() {
+    const svg = $('tabuleiro');
+    svg.classList.remove('resolvido');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.setAttribute('width', S.geo.w); svg.setAttribute('height', S.geo.h);
+    svg.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
+    S.edgeEls = {}; S.markEls = {};
+
+    const { rows, cols, clues } = S.puzzle;
+
+    // dicas
+    S.clueEls = [];
+    for (let r = 0; r < rows; r++) {
+      S.clueEls[r] = [];
+      for (let c = 0; c < cols; c++) {
+        if (clues[r][c] == null || clues[r][c] < 0) { S.clueEls[r][c] = null; continue; }
+        const t = document.createElementNS(SVGNS, 'text');
+        t.setAttribute('x', dx(c) + S.geo.gap / 2);
+        t.setAttribute('y', dy(r) + S.geo.gap / 2);
+        t.setAttribute('class', 'dica');
+        t.setAttribute('font-size', S.geo.fonte);
+        t.textContent = clues[r][c];
+        svg.appendChild(t); S.clueEls[r][c] = t;
+      }
+    }
+
+    const addEdge = (key, x1, y1, x2, y2) => {
+      const hit = document.createElementNS(SVGNS, 'line');
+      hit.setAttribute('x1', x1); hit.setAttribute('y1', y1);
+      hit.setAttribute('x2', x2); hit.setAttribute('y2', y2);
+      hit.setAttribute('class', 'hit');
+      bindEdgePointer(hit, key);
+      svg.appendChild(hit);
+
+      const ln = document.createElementNS(SVGNS, 'line');
+      ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+      ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+      ln.setAttribute('class', 'aresta grade');
+      svg.appendChild(ln); S.edgeEls[key] = ln;
+
+      // × no ponto médio (oculto por padrão)
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, s = S.geo.mx;
+      const g = document.createElementNS(SVGNS, 'path');
+      g.setAttribute('d', 'M' + (mx - s) + ',' + (my - s) + ' L' + (mx + s) + ',' + (my + s)
+        + ' M' + (mx - s) + ',' + (my + s) + ' L' + (mx + s) + ',' + (my - s));
+      g.setAttribute('class', 'marca oculto');
+      svg.appendChild(g); S.markEls[key] = g;
+    };
+    // arestas horizontais e verticais
+    for (let r = 0; r <= rows; r++) for (let c = 0; c < cols; c++) addEdge(hKey(r, c), dx(c), dy(r), dx(c + 1), dy(r));
+    for (let r = 0; r < rows; r++) for (let c = 0; c <= cols; c++) addEdge(vKey(r, c), dx(c), dy(r), dx(c), dy(r + 1));
+
+    // pontos da grade
+    for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+      const d = document.createElementNS(SVGNS, 'circle');
+      d.setAttribute('cx', dx(c)); d.setAttribute('cy', dy(r));
+      d.setAttribute('r', S.geo.raio); d.setAttribute('class', 'ponto');
+      svg.appendChild(d);
+    }
+  }
+
+  // -------------------------------------------------- ponteiro: tap vs hold
+  /**
+   * Liga os eventos de ponteiro de uma aresta, distinguindo "tap" de "hold":
+   * ao pressionar, agenda um timer de HOLD_MS; se disparar antes do soltar, é
+   * um hold (toggleMark, ×); se soltar antes, é um tap (toggleLine, traço).
+   * @param {SVGElement} el  a linha "hit" que captura o ponteiro.
+   * @param {string} key  chave da aresta.
+   */
+  function bindEdgePointer(el, key) {
+    let timer = null, fired = false;
+    const down = (ev) => {
+      ev.preventDefault();
+      fired = false;
+      timer = setTimeout(() => { fired = true; toggleMark(key); }, HOLD_MS);
+    };
+    const up = () => { if (timer) { clearTimeout(timer); timer = null; } if (!fired) toggleLine(key); };
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } fired = false; };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointerleave', cancel);
+    el.addEventListener('pointercancel', cancel);
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  // -------------------------------------------------- movimentos
+  // Um "movimento" é uma lista de mudanças { key, kind:'line'|'mark', from, to }.
+  // Guardar from/to torna cada movimento reversível (undo) e re-aplicável (redo).
+
+  // aplica (ou re-aplica) as mudanças usando o lado `to`
+  function applyChanges(changes) {
+    for (const ch of changes) {
+      const set = ch.kind === 'mark' ? S.marks : S.lines;
+      if (ch.to) set.add(ch.key); else set.delete(ch.key);
+    }
+  }
+  // reverte as mudanças usando o lado `from`
+  function revertChanges(changes) {
+    for (const ch of changes) {
+      const set = ch.kind === 'mark' ? S.marks : S.lines;
+      if (ch.from) set.add(ch.key); else set.delete(ch.key);
+    }
+  }
+  // registra um movimento novo: aplica, empilha no undo e limpa o redo
+  function pushMove(changes) {
+    stopSolve();
+    applyChanges(changes);
+    S.undo.push({ changes });
+    S.redo = [];
+    refresh();
+  }
+
+  // alterna o traço de uma aresta (e remove um × conflitante, se houver)
+  function toggleLine(key) {
+    if (!S.puzzle) return;
+    const from = S.lines.has(key), to = !from;
+    const changes = [{ key, kind: 'line', from, to }];
+    if (to && S.marks.has(key)) changes.push({ key, kind: 'mark', from: true, to: false });
+    pushMove(changes);
+  }
+  // alterna o × de uma aresta (e remove um traço conflitante, se houver)
+  function toggleMark(key) {
+    if (!S.puzzle) return;
+    const from = S.marks.has(key), to = !from;
+    const changes = [{ key, kind: 'mark', from, to }];
+    if (to && S.lines.has(key)) changes.push({ key, kind: 'line', from: true, to: false });
+    pushMove(changes);
+  }
+  // -------------------------------------------------- resolver (animação)
+  // interrompe a animação em curso e restaura o botão
+  function stopSolve() {
+    if (S.anim) { clearInterval(S.anim); S.anim = null; }
+    if (S.focoEl) { S.focoEl.classList && S.focoEl.classList.remove('foco'); S.focoEl = null; }
+    $('resolver').textContent = '▶ Resolver';
+  }
+  /**
+   * Anima a resolução. Pede a core.js o trace conforme o modo:
+   *   - 'deducao': solveTrace (avança sempre, usa a solução conhecida);
+   *   - 'busca':   solveTraceBusca (busca real, com palpites e backtracking).
+   * Depois reproduz o trace passo a passo (agrupando passos por quadro quando
+   * é longo), destacando a aresta corrente. Um 2º clique no botão para.
+   */
+  function resolver() {
+    if (!S.puzzle) return;
+    if (S.anim) { stopSolve(); refresh(); return; }   // segundo clique: parar
+    const p = S.puzzle;
+    const modo = $('modoSolve').value;
+    // 'deducao': avança sempre (usa a solução conhecida). 'busca': busca real,
+    // com palpites e backtracking (a partir só das dicas).
+    const trace = modo === 'busca'
+      ? SL.solveTraceBusca(p.rows, p.cols, p.clues)
+      : SL.solveTrace(p.rows, p.cols, p.clues, p.solution);
+
+    // recomeça do zero (sem registrar como movimentos)
+    S.lines = new Set(); S.marks = new Set(); S.colors = {}; S.colorSeq = 0;
+    S.undo = []; S.redo = [];
+    refresh();
+    $('resolver').textContent = '⏸ Parar';
+
+    // anima em ~5 s, agrupando passos por quadro quando o trace é longo
+    const quadros = Math.min(trace.length, 360);
+    const porQuadro = Math.max(1, Math.ceil(trace.length / quadros));
+    const delay = Math.max(12, Math.min(50, Math.round(5200 / Math.max(1, quadros))));
+    let i = 0;
+    S.anim = setInterval(() => {
+      if (i >= trace.length) {
+        // busca real truncada: encerra mostrando a solução
+        if (modo === 'busca' && !S.won && p.solution) {
+          S.lines = new Set(p.solution); S.marks = new Set(); S.colors = {};
+        }
+        stopSolve(); refresh(); return;
+      }
+      let st;
+      for (let n = 0; n < porQuadro && i < trace.length; n++) {
+        st = trace[i++];
+        if (st.val === 'line') { S.lines.add(st.key); S.marks.delete(st.key); }
+        else if (st.val === 'empty') { S.marks.add(st.key); S.lines.delete(st.key); }
+        else { S.lines.delete(st.key); S.marks.delete(st.key); }   // unset (backtrack)
+      }
+      refresh();
+      if (S.focoEl) S.focoEl.classList.remove('foco');
+      if (st) { S.focoEl = S.edgeEls[st.key]; if (S.focoEl) S.focoEl.classList.add('foco'); }
+    }, delay);
+  }
+
+  // desfaz o último movimento (move undo -> redo)
+  function undo() {
+    stopSolve();
+    if (!S.undo.length) return;
+    const m = S.undo.pop();
+    revertChanges(m.changes);
+    S.redo.push(m);
+    refresh();
+  }
+  // refaz o último desfeito (move redo -> undo)
+  function redo() {
+    stopSolve();
+    if (!S.redo.length) return;
+    const m = S.redo.pop();
+    applyChanges(m.changes);
+    S.undo.push(m);
+    refresh();
+  }
+  // apaga todos os traços e marcas como um único movimento (desfazível)
+  function limpar() {
+    if (!S.lines.size && !S.marks.size) return;
+    const changes = [];
+    for (const k of S.lines) changes.push({ key: k, kind: 'line', from: true, to: false });
+    for (const k of S.marks) changes.push({ key: k, kind: 'mark', from: true, to: false });
+    pushMove(changes);
+  }
+
+  // -------------------------------------------------- cores dos segmentos
+  /**
+   * Recolore os segmentos (componentes conexos das linhas traçadas). Agrupa as
+   * arestas por componente (union-find sobre os pontos) e dá a cada componente
+   * a cor MAJORITÁRIA entre as cores que suas arestas já tinham — é assim que,
+   * ao fundir dois segmentos, prevalece a cor do segmento MAIOR (mais arestas).
+   * Componentes sem cor anterior recebem uma cor livre da paleta (ou uma cor
+   * HSL gerada quando a paleta se esgota). Atualiza S.colors in-place.
+   */
+  function recolor() {
+    // union-find por pontos "r,c"
+    const parent = {};
+    const find = (x) => { while (parent[x] !== x) { x = parent[x]; } return x; };
+    const ensure = (x) => { if (parent[x] === undefined) parent[x] = x; };
+    for (const key of S.lines) {
+      const [[r1, c1], [r2, c2]] = edgeDots(key);
+      const a = r1 + ',' + c1, b = r2 + ',' + c2;
+      ensure(a); ensure(b);
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    }
+
+    // agrupa as arestas por componente (raiz)
+    const grupos = {};
+    for (const key of S.lines) {
+      const [[r1, c1]] = edgeDots(key);
+      const root = find(r1 + ',' + c1);
+      (grupos[root] = grupos[root] || []).push(key);
+    }
+
+    const novo = {};
+    const usadas = new Set();
+    const pendentes = [];
+    // 1ª passada: componente herda a cor majoritária das suas arestas
+    for (const root in grupos) {
+      const arestas = grupos[root];
+      const tally = {};
+      for (const k of arestas) {
+        const cor = S.colors[k];
+        if (cor) tally[cor] = (tally[cor] || 0) + 1;
+      }
+      let cor = null, melhor = 0;
+      for (const c in tally) if (tally[c] > melhor) { melhor = tally[c]; cor = c; }
+      if (cor) {
+        for (const k of arestas) novo[k] = cor;
+        usadas.add(cor);
+      } else {
+        pendentes.push(arestas);
+      }
+    }
+    // 2ª passada: componentes novos (sem cor anterior) ganham cor livre da paleta
+    for (const arestas of pendentes) {
+      let cor = PALETA.find((c) => !usadas.has(c));
+      if (!cor) cor = 'hsl(' + Math.round((S.colorSeq++ * 137.5) % 360) + ',75%,62%)';
+      usadas.add(cor);
+      for (const k of arestas) novo[k] = cor;
+    }
+    S.colors = novo;
+  }
+
+  // -------------------------------------------------- derivações
+  /**
+   * Deriva, a partir das linhas traçadas, dois agregados usados na renderização
+   * e nas checagens:
+   *   - dotDeg["r,c"]: grau (nº de linhas) em cada ponto;
+   *   - cellCount[r][c]: nº de arestas traçadas ao redor de cada célula.
+   * @returns {{dotDeg: object, cellCount: number[][]}}
+   */
+  function computeDerived() {
+    const { rows, cols } = S.puzzle;
+    const dotDeg = {};
+    const cellCount = Array.from({ length: rows }, () => new Array(cols).fill(0));
+    const inc = (r, c) => { dotDeg[r + ',' + c] = (dotDeg[r + ',' + c] || 0) + 1; };
+    for (const key of S.lines) {
+      const [[r1, c1], [r2, c2]] = edgeDots(key);
+      inc(r1, c1); inc(r2, c2);
+      for (const [cr, cc] of edgeCells(key))
+        if (cr >= 0 && cr < rows && cc >= 0 && cc < cols) cellCount[cr][cc]++;
+    }
+    return { dotDeg, cellCount };
+  }
+  /**
+   * Aresta PROIBIDA (dica de jogo, sem ser erro ainda): traçá-la JÁ seria
+   * inviável porque algum ponto já tem grau 2 ou alguma célula já bateu a dica.
+   * Usada para esmaecer arestas que não podem mais entrar no laço.
+   */
+  function isForbidden(key, der) {
+    const { rows, cols, clues } = S.puzzle;
+    for (const [r, c] of edgeDots(key)) if ((der.dotDeg[r + ',' + c] || 0) >= 2) return true;
+    for (const [r, c] of edgeCells(key))
+      if (r >= 0 && r < rows && c >= 0 && c < cols && clues[r][c] >= 0 && der.cellCount[r][c] >= clues[r][c]) return true;
+    return false;
+  }
+  /**
+   * Aresta em ERRO: já traçada e violando uma restrição (ponto com grau > 2 ou
+   * célula que excedeu a dica). Renderizada em vermelho.
+   */
+  function isError(key, der) {
+    const { rows, cols, clues } = S.puzzle;
+    for (const [r, c] of edgeDots(key)) if ((der.dotDeg[r + ',' + c] || 0) > 2) return true;
+    for (const [r, c] of edgeCells(key))
+      if (r >= 0 && r < rows && c >= 0 && c < cols && clues[r][c] >= 0 && der.cellCount[r][c] > clues[r][c]) return true;
+    return false;
+  }
+  /**
+   * Verifica VITÓRIA. Três condições, todas necessárias:
+   *   1. toda dica está exatamente satisfeita;
+   *   2. todo ponto tem grau 0 ou 2 (sem pontas nem cruzamentos);
+   *   3. as linhas formam UM ÚNICO componente conexo (um só laço).
+   * A condição 3 é checada por um flood fill no grafo das linhas: deve alcançar
+   * todos os pontos que têm linhas.
+   * @returns {boolean}
+   */
+  function checkWin(der) {
+    const { rows, cols, clues } = S.puzzle;
+    if (!S.lines.size) return false;
+    // (1) dicas satisfeitas
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      if (clues[r][c] >= 0 && der.cellCount[r][c] !== clues[r][c]) return false;
+    // (2) todo ponto com grau 0 ou 2
+    for (const k in der.dotDeg) if (der.dotDeg[k] !== 0 && der.dotDeg[k] !== 2) return false;
+    // (3) conexidade: monta a lista de adjacências das linhas...
+    const adj = {};
+    const add = (a, b) => { (adj[a] = adj[a] || []).push(b); (adj[b] = adj[b] || []).push(a); };
+    for (const key of S.lines) {
+      const [[r1, c1], [r2, c2]] = edgeDots(key);
+      add(r1 + ',' + c1, r2 + ',' + c2);
+    }
+    // ...e faz um flood fill a partir de um ponto qualquer
+    const nodes = Object.keys(adj);
+    const seen = new Set([nodes[0]]);
+    const st = [nodes[0]];
+    while (st.length) {
+      const v = st.pop();
+      for (const w of adj[v]) if (!seen.has(w)) { seen.add(w); st.push(w); }
+    }
+    return seen.size === nodes.length;
+  }
+
+  // -------------------------------------------------- render
+  /**
+   * Re-renderiza tudo a partir do estado atual (S): recolore, recalcula as
+   * derivações e atualiza classe/cor de cada aresta, das marcas (×), das dicas
+   * (ok / excesso) e a flag de vitória; sincroniza também os botões e o status.
+   * É o ponto único de atualização da tela, chamado após qualquer mudança.
+   */
+  function refresh() {
+    recolor();
+    const der = computeDerived();
+    const { rows, cols, clues } = S.puzzle;
+
+    for (const key in S.edgeEls) {
+      const el = S.edgeEls[key];
+      const mk = S.markEls[key];
+      if (S.lines.has(key)) {
+        if (isError(key, der)) { el.setAttribute('class', 'aresta erro'); el.style.stroke = ''; }
+        else { el.setAttribute('class', 'aresta traco'); el.style.stroke = S.colors[key] || '#4f9dff'; }
+        mk.setAttribute('class', 'marca oculto');
+      } else {
+        el.style.stroke = '';
+        el.setAttribute('class', 'aresta ' + (isForbidden(key, der) ? 'inviavel' : 'grade'));
+        mk.setAttribute('class', S.marks.has(key) ? 'marca' : 'marca oculto');
+      }
+    }
+
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const t = S.clueEls[r] && S.clueEls[r][c]; if (!t) continue;
+      const n = der.cellCount[r][c], k = clues[r][c];
+      t.setAttribute('class', 'dica' + (n > k ? ' excesso' : n === k ? ' ok' : ''));
+    }
+
+    S.won = checkWin(der);
+    $('tabuleiro').classList.toggle('resolvido', S.won);
+    if (S.won) setStatus('Resolvido! 🎉', 'vitoria');
+    else setStatus('Tabuleiro ' + rows + '×' + cols + ' — ' + S.lines.size + ' arestas, ' + S.marks.size + ' marcas.');
+
+    $('desfazer').disabled = !S.undo.length;
+    $('refazer').disabled = !S.redo.length;
+    $('limpar').disabled = !S.lines.size && !S.marks.size;
+  }
+
+  // -------------------------------------------------- CSV
+  /**
+   * Exporta o estado atual como CSV (formato por seções na 1ª coluna): meta
+   * (tamanho/seed/dificuldade), clue (dicas), sol (laço solução), line/mark
+   * (jogadas atuais) e move (histórico de undo). Dispara o download do arquivo.
+   */
+  function exportCsv() {
+    if (!S.puzzle) return;
+    const p = S.puzzle;
+    const linhas = [['section', 'a', 'b', 'c', 'd']];
+    linhas.push(['meta', p.rows, p.cols, p.seed, p.dificuldade]);
+    for (let r = 0; r < p.rows; r++) for (let c = 0; c < p.cols; c++)
+      if (p.clues[r][c] >= 0) linhas.push(['clue', r, c, p.clues[r][c], '']);
+    for (const k of p.solution) linhas.push(['sol', k, '', '', '']);
+    for (const k of S.lines) linhas.push(['line', k, '', '', '']);
+    for (const k of S.marks) linhas.push(['mark', k, '', '', '']);
+    S.undo.forEach((m, i) => m.changes.forEach((ch) =>
+      linhas.push(['move', i, ch.key, ch.kind, ch.to ? 'add' : 'remove'])));
+
+    const csv = linhas.map((row) => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'slitherlink_' + p.rows + 'x' + p.cols + '_' + p.seed + '.csv';
+    a.click(); URL.revokeObjectURL(url);
+  }
+  /**
+   * Importa um CSV no formato de exportCsv: reconstrói o puzzle (meta + clues +
+   * sol), instala-o e reaplica jogadas (line/mark) e o histórico de undo (move).
+   * @param {string} texto  conteúdo do arquivo CSV.
+   */
+  function importCsv(texto) {
+    const linhas = texto.split(/\r?\n/).filter((l) => l.trim().length);
+    let rows = 0, cols = 0, seed = '', dif = 'medio';
+    const clueRows = [], sol = [], lines = [], marks = [], movesByIdx = {};
+    for (const linha of linhas) {
+      const f = linha.split(',');
+      switch (f[0]) {
+        case 'meta': rows = +f[1]; cols = +f[2]; seed = f[3]; dif = f[4]; break;
+        case 'clue': clueRows.push([+f[1], +f[2], +f[3]]); break;
+        case 'sol': sol.push(f[1]); break;
+        case 'line': lines.push(f[1]); break;
+        case 'mark': marks.push(f[1]); break;
+        case 'move': (movesByIdx[+f[1]] = movesByIdx[+f[1]] || []).push({ key: f[2], kind: f[3], action: f[4] }); break;
+        default: break;
+      }
+    }
+    if (!rows || !cols) { setStatus('CSV inválido (sem meta).', 'aviso'); return; }
+    const clues = Array.from({ length: rows }, () => new Array(cols).fill(-1));
+    for (const [r, c, v] of clueRows) clues[r][c] = v;
+
+    setPuzzle({ rows, cols, seed, dificuldade: dif, clues, solution: sol, nClues: clueRows.length });
+    S.lines = new Set(lines); S.marks = new Set(marks);
+    const idxs = Object.keys(movesByIdx).map(Number).sort((a, b) => a - b);
+    S.undo = idxs.map((i) => ({
+      changes: movesByIdx[i].map((mv) => ({ key: mv.key, kind: mv.kind, to: mv.action === 'add', from: mv.action !== 'add' })),
+    }));
+    S.redo = []; refresh();
+    setStatus('Importado: ' + rows + '×' + cols + ', ' + clueRows.length + ' dicas, ' + S.undo.length + ' movimentos.');
+  }
+
+  // -------------------------------------------------- utilidades
+  // escreve a barra de status (cls opcional: 'aviso' | 'vitoria' | ...)
+  function setStatus(txt, cls) { const el = $('status'); el.textContent = txt; el.className = 'status' + (cls ? ' ' + cls : ''); }
+  // overlay "Gerando…" durante o trabalho do worker
+  function showOverlay(txt) { $('overlayTexto').textContent = txt; $('overlay').classList.remove('oculto'); }
+  function hideOverlay() { $('overlay').classList.add('oculto'); }
+
+  /**
+   * Liga os listeners dos controles e atalhos (Ctrl+Z / Ctrl+Y) e gera o
+   * primeiro puzzle. Chamado no carregamento da página.
+   */
+  function init() {
+    $('gerar').addEventListener('click', gerar);
+    $('resolver').addEventListener('click', resolver);
+    $('desfazer').addEventListener('click', undo);
+    $('refazer').addEventListener('click', redo);
+    $('limpar').addEventListener('click', limpar);
+    $('exportar').addEventListener('click', exportCsv);
+    $('importar').addEventListener('click', () => $('arquivo').click());
+    $('arquivo').addEventListener('change', (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => importCsv(String(reader.result));
+      reader.readAsText(file); e.target.value = '';
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+    });
+    gerar();
+  }
+
+  // gancho de testes/depuração: expõe o estado e atalhos no window (__SL.solve()
+  // preenche a solução de uma vez e devolve se isso é vitória).
+  window.__SL = {
+    state: S,
+    solve() { S.lines = new Set(S.puzzle.solution); S.marks = new Set(); S.undo = []; S.redo = []; S.colors = {}; refresh(); return S.won; },
+    toggleLine, toggleMark, undo, redo, limpar, refresh, exportCsv, importCsv,
+  };
+
+  // inicializa assim que o DOM estiver pronto
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
