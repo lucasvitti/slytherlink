@@ -4,6 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Slitherlink</title>
+  <meta name="description" content="Gere e resolva o laço único — por dedução lógica. Jogo de Slitherlink no navegador." />
+  <!-- prévia ao compartilhar (Open Graph / Twitter) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://slitherlink.lucas.mat.br/" />
+  <meta property="og:title" content="Slitherlink" />
+  <meta property="og:description" content="Gere e resolva o laço único — por dedução lógica." />
+  <meta property="og:image" content="https://slitherlink.lucas.mat.br/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Tabuleiro de Slitherlink com um laço azul" />
+  <meta property="og:locale" content="pt_BR" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Slitherlink" />
+  <meta name="twitter:description" content="Gere e resolva o laço único — por dedução lógica." />
+  <meta name="twitter:image" content="https://slitherlink.lucas.mat.br/og-image.png" />
   <link rel="stylesheet" href="css/style.css" />
   <!-- PWA -->
   <link rel="manifest" href="manifest.json" />
@@ -102,8 +117,8 @@
     <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
   </main>
 
-  <script src="js/core.js?v=15"></script>
-  <script src="js/game.js?v=15"></script>
+  <script src="js/core.js?v=16"></script>
+  <script src="js/game.js?v=16"></script>
   <script>
     // registra o service worker (PWA: instalável + offline)
     if ('serviceWorker' in navigator) {

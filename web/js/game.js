@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '15';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '16';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -159,6 +159,39 @@
     const z = Math.min(r.width / S.geo.w, r.height / S.geo.h) * 0.97;
     S.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
     centraliza();
+  }
+
+  /**
+   * "Câmera que segue o solver": durante a animação, desloca o pan para manter
+   * a aresta em foco perto do centro do palco — assim, ao gravar um vídeo de um
+   * tabuleiro AMPLIADO, o olho acompanha onde o solver está trabalhando.
+   * Só age no eixo em que o tabuleiro é MAIOR que o palco (se cabe, não mexe);
+   * usa uma "zona morta" central para a câmera não tremer a cada passo e mantém
+   * o tabuleiro cobrindo o palco (sem margens vazias entrando em cena). A
+   * suavidade vem de um transition no transform, ligado só durante a animação.
+   */
+  function seguirFoco(key) {
+    const el = S.edgeEls[key];
+    if (!el) return;
+    const r = $('scroll').getBoundingClientRect();
+    const W = S.geo.w * S.zoom, H = S.geo.h * S.zoom;
+    const mx = ((+el.getAttribute('x1') + +el.getAttribute('x2')) / 2) * S.zoom;
+    const my = ((+el.getAttribute('y1') + +el.getAttribute('y2')) / 2) * S.zoom;
+    let px = S.panX, py = S.panY;
+    const zmx = r.width * 0.28, zmy = r.height * 0.28;   // meia-largura da zona morta
+    if (W > r.width + 1) {                                // mais largo que o palco: segue em X
+      const fx = S.panX + mx;                            // posição do foco na viewport
+      if (fx < r.width / 2 - zmx || fx > r.width / 2 + zmx) px = r.width / 2 - mx;
+      px = Math.min(0, Math.max(r.width - W, px));        // clampa: board sempre cobre o palco
+    }
+    if (H > r.height + 1) {                               // mais alto que o palco: segue em Y
+      const fy = S.panY + my;
+      if (fy < r.height / 2 - zmy || fy > r.height / 2 + zmy) py = r.height / 2 - my;
+      py = Math.min(0, Math.max(r.height - H, py));
+    }
+    if (Math.abs(px - S.panX) > 0.5 || Math.abs(py - S.panY) > 0.5) {
+      S.panX = px; S.panY = py; aplicaView();
+    }
   }
 
   // -------------------------------------------------- pan (arrastar a viewport)
@@ -440,6 +473,7 @@
   function stopSolve() {
     if (S.anim) { clearInterval(S.anim); S.anim = null; }
     if (S.focoEl) { S.focoEl.classList && S.focoEl.classList.remove('foco'); S.focoEl = null; }
+    const svg = $('tabuleiro'); if (svg) svg.style.transition = '';   // desliga a câmera suave
     $('resolver').textContent = '▶ Resolver';
   }
   /**
@@ -482,6 +516,9 @@
       delay = 16;
       porQuadro = Math.max(1, Math.ceil(trace.length / (MAX_TOTAL / delay)));
     }
+    // câmera que segue o solver: transition no transform p/ o pan deslizar
+    const durCam = { lenta: 700, normal: 450, rapida: 300 }[$('velocidade').value] || 450;
+    $('tabuleiro').style.transition = 'transform ' + durCam + 'ms ease-out';
     let i = 0;
     S.anim = setInterval(() => {
       if (i >= trace.length) {
@@ -500,7 +537,10 @@
       }
       refresh();
       if (S.focoEl) S.focoEl.classList.remove('foco');
-      if (st) { S.focoEl = S.edgeEls[st.key]; if (S.focoEl) S.focoEl.classList.add('foco'); }
+      if (st) {
+        S.focoEl = S.edgeEls[st.key]; if (S.focoEl) S.focoEl.classList.add('foco');
+        seguirFoco(st.key);   // a câmera acompanha a aresta em foco
+      }
     }, delay);
   }
 
