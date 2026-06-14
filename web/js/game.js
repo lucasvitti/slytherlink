@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '20';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '21';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -293,43 +293,28 @@
     if (estavaOculto) desenhaLinhasMini();             // acabou de aparecer: sincroniza
   }
   /**
-   * Liga as interações do minimapa: arrastar o "grip" reposiciona o painel;
-   * arrastar/clicar no corpo do mapa reposiciona a câmera (pan) do tabuleiro.
-   * Usa pointer events, então funciona com mouse e toque.
+   * Liga a interação do minimapa: arrastar o painel (em QUALQUER ponto dele) o
+   * reposiciona sobre o palco — o mapa é só um overview móvel, não navega o
+   * tabuleiro (para isso há a roda/arrastar/setas no próprio tabuleiro). Usa
+   * pointer events (mouse e toque) e segue o ponteiro pelo window.
    */
   function setupMinimapa() {
-    const mm = $('minimap'), grip = mm.querySelector('.mini-grip'), mini = $('miniSvg');
-    let movePainel = null, navega = false;
-    // arrastar o ponto clicado no mapa -> centraliza a câmera nele
-    const navegar = (e) => {
-      const r = mini.getBoundingClientRect();
-      if (!r.width || !S.puzzle) return;                     // mapa oculto/sem tabuleiro
-      cancelAnimacaoCamera();
-      const bx = (e.clientX - r.left) / r.width * S.geo.w;   // ponto em coords do board
-      const by = (e.clientY - r.top) / r.height * S.geo.h;
-      const sc = $('scroll').getBoundingClientRect();
-      S.panX = sc.width / 2 - bx * S.zoom;                   // centraliza o ponto clicado
-      S.panY = sc.height / 2 - by * S.zoom;
-      aplicaView();
-    };
-    grip.addEventListener('pointerdown', (e) => {
+    const mm = $('minimap');
+    let mover = null;
+    mm.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const r = mm.getBoundingClientRect();
-      movePainel = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      mover = { dx: e.clientX - r.left, dy: e.clientY - r.top };
     });
-    mini.addEventListener('pointerdown', (e) => { e.preventDefault(); navega = true; navegar(e); });
-    // move/up no WINDOW (como o pan do botão do meio): segue o ponteiro mesmo
-    // fora do painel, sem depender de setPointerCapture.
     window.addEventListener('pointermove', (e) => {
-      if (movePainel) {
-        const pr = $('palco').getBoundingClientRect();
-        let x = e.clientX - pr.left - movePainel.dx, y = e.clientY - pr.top - movePainel.dy;
-        x = Math.max(0, Math.min(pr.width - mm.offsetWidth, x));
-        y = Math.max(0, Math.min(pr.height - mm.offsetHeight, y));
-        mm.style.left = x + 'px'; mm.style.top = y + 'px'; mm.style.right = 'auto';
-      } else if (navega) { navegar(e); }
+      if (!mover) return;
+      const pr = $('palco').getBoundingClientRect();
+      let x = e.clientX - pr.left - mover.dx, y = e.clientY - pr.top - mover.dy;
+      x = Math.max(0, Math.min(pr.width - mm.offsetWidth, x));
+      y = Math.max(0, Math.min(pr.height - mm.offsetHeight, y));
+      mm.style.left = x + 'px'; mm.style.top = y + 'px'; mm.style.right = 'auto';
     });
-    const solta = () => { movePainel = null; navega = false; };
+    const solta = () => { mover = null; };
     window.addEventListener('pointerup', solta);
     window.addEventListener('pointercancel', solta);
   }
