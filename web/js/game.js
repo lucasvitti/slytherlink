@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '12';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '13';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -691,6 +691,10 @@
     recolor();
     const der = computeDerived();
     const { rows, cols, clues } = S.puzzle;
+    // arestas DEDUZIDAS como vazias (esmaecimento inteligente): propaga as
+    // regras a partir dos traços + marcas × do jogador (não só os casos
+    // imediatos). Inclui as consequências das marcas em arestas vizinhas.
+    const deduzidas = SL.deduceEmpties(rows, cols, clues, [...S.lines], [...S.marks]);
 
     for (const key in S.edgeEls) {
       const el = S.edgeEls[key];
@@ -701,7 +705,7 @@
         mk.setAttribute('class', 'marca oculto');
       } else {
         el.style.stroke = '';
-        el.setAttribute('class', 'aresta ' + (isForbidden(key, der) ? 'inviavel' : 'grade'));
+        el.setAttribute('class', 'aresta ' + (deduzidas.has(key) ? 'inviavel' : 'grade'));
         mk.setAttribute('class', S.marks.has(key) ? 'marca' : 'marca oculto');
       }
     }

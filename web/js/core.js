@@ -1487,10 +1487,86 @@
   }
 
   // API pública do módulo.
+  // ------------------------------------------- dedução de arestas inviáveis
+  // Propaga as deduções LOCAIS (regras de vértice e de célula) a partir do
+  // estado atual do jogador — traços (LINE), marcas × (EMPTY) e dicas — e
+  // devolve o conjunto de arestas DEDUZIDAS como vazias (i.e., que não podem
+  // mais entrar no laço). É o que alimenta o esmaecimento "inteligente": além
+  // dos casos imediatos (em volta de um 0, vértice de grau 2…), propaga as
+  // consequências das marcas do jogador. Robusto a estados contraditórios:
+  // nunca sobrescreve uma aresta já definida; na dúvida, simplesmente para.
+  function deduceEmpties(rows, cols, clues, lineKeys, markKeys) {
+    const topo = buildTopology(rows, cols);
+    const { nE, nDots, edgeEnds, dotEdges, edgeKey, keyToIdx } = topo;
+
+    const cellClue = [], cellEdgesArr = [], edgeCells = Array.from({ length: nE }, () => []);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const k = clues[r][c];
+      if (k == null || k < 0) continue;
+      const id = cellClue.length, es = topo.cellEdges(r, c);
+      cellClue.push(k); cellEdgesArr.push(es);
+      for (const e of es) edgeCells[e].push(id);
+    }
+    const nCells = cellClue.length;
+
+    const state = new Uint8Array(nE);   // UNKNOWN / LINE / EMPTY
+    for (const k of (lineKeys || [])) { const e = keyToIdx[k]; if (e != null) state[e] = LINE; }
+    for (const k of (markKeys || [])) { const e = keyToIdx[k]; if (e != null && state[e] === UNKNOWN) state[e] = EMPTY; }
+
+    const lineV = new Int16Array(nDots), unkV = new Int16Array(nDots);
+    for (let d = 0; d < nDots; d++) for (const e of dotEdges[d]) {
+      if (state[e] === LINE) lineV[d]++; else if (state[e] === UNKNOWN) unkV[d]++;
+    }
+    const lineC = new Int16Array(nCells), unkC = new Int16Array(nCells);
+    for (let i = 0; i < nCells; i++) for (const e of cellEdgesArr[i]) {
+      if (state[e] === LINE) lineC[i]++; else if (state[e] === UNKNOWN) unkC[i]++;
+    }
+
+    const empties = new Set();
+    const fila = [];
+    for (let d = 0; d < nDots; d++) fila.push(d | 0x40000000);
+    for (let i = 0; i < nCells; i++) fila.push(i);
+
+    function setEdge(e, val) {
+      if (state[e] !== UNKNOWN) return;            // já decidida: não sobrescreve
+      state[e] = val;
+      if (val === EMPTY) empties.add(edgeKey[e]);
+      const [v1, v2] = edgeEnds[e];
+      for (const v of [v1, v2]) {
+        unkV[v]--; if (val === LINE) lineV[v]++;
+        fila.push(v | 0x40000000);
+      }
+      for (const cel of edgeCells[e]) {
+        unkC[cel]--; if (val === LINE) lineC[cel]++;
+        fila.push(cel);
+      }
+    }
+    function regraVertice(v) {
+      const L = lineV[v], U = unkV[v];
+      if (U === 0) return;
+      if (L >= 2) { for (const e of dotEdges[v]) if (state[e] === UNKNOWN) setEdge(e, EMPTY); }
+      else if (L === 1 && U === 1) { for (const e of dotEdges[v]) if (state[e] === UNKNOWN) setEdge(e, LINE); }
+      else if (L === 0 && U === 1) { for (const e of dotEdges[v]) if (state[e] === UNKNOWN) setEdge(e, EMPTY); }
+    }
+    function regraCelula(cel) {
+      const L = lineC[cel], U = unkC[cel], k = cellClue[cel];
+      if (U === 0) return;
+      if (L >= k) { for (const e of cellEdgesArr[cel]) if (state[e] === UNKNOWN) setEdge(e, EMPTY); }
+      else if (L + U === k) { for (const e of cellEdgesArr[cel]) if (state[e] === UNKNOWN) setEdge(e, LINE); }
+    }
+
+    let guard = 0;
+    while (fila.length && guard++ < nE * 8) {
+      const x = fila.pop();
+      if (x & 0x40000000) regraVertice(x & 0x3FFFFFFF); else regraCelula(x);
+    }
+    return empties;
+  }
+
   const SL = {
     makeRng, buildTopology, generateLoop, cluesFromLoop, countSolutions,
     reduceClues, reduceCluesBinaria, reduceCluesCEGAR, reduzDicas,
-    generatePuzzle, solveTrace, solveTraceBusca, hKey, vKey,
+    generatePuzzle, solveTrace, solveTraceBusca, deduceEmpties, hKey, vKey,
     UNKNOWN, LINE, EMPTY,
   };
 
