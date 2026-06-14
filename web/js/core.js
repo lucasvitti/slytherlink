@@ -437,6 +437,65 @@
   const UNKNOWN = 0, LINE = 1, EMPTY = 2;
 
   /**
+   * PADRÕES FIXOS — deduções que dependem SÓ das dicas e valem em TODA solução
+   * (sólidas). Servem para semear o solver: as arestas forçadas "nascem" no
+   * tabuleiro e a propagação cascateia a partir delas, cortando muito da busca
+   * (e acelerando a verificação de unicidade na geração). Como cada regra é
+   * verdadeira em toda solução, semear NUNCA remove uma solução — a contagem
+   * (uniqueness) é preservada.
+   *
+   * Teoremas locais clássicos do Slitherlink usados aqui:
+   *   - dica 3 num CANTO do tabuleiro: as 2 arestas de borda são LINE — o
+   *     vértice do canto só tem 2 arestas e grau 1 é proibido, e um 3 só pode
+   *     omitir uma aresta, então não pode omitir nenhuma das duas externas.
+   *   - dica 1 num CANTO: as 2 arestas de borda são EMPTY (mesmo argumento ao
+   *     contrário: se as duas externas entrassem, o canto teria grau 2 e a
+   *     célula já teria 2 > 1).
+   *   - dois 3 na DIAGONAL: em cada um, as 2 arestas do canto OPOSTO ao vértice
+   *     compartilhado são LINE (omiti-las forçaria o vértice partilhado a grau 2
+   *     e mataria o outro 3).
+   *   - dois 3 LADO A LADO (h/v): as 2 arestas EXTERNAS (paralelas à
+   *     compartilhada) são LINE. (A do MEIO NÃO é forçada — dois 3 isolados
+   *     formam um retângulo com o meio VAZIO; por isso não a semeamos.)
+   *
+   * @returns {{e:number, val:number}[]} arestas forçadas (val = LINE | EMPTY).
+   */
+  function padroesFixos(rows, cols, clues, topo) {
+    const { hIdx, vIdx } = topo;
+    const out = [];
+    const add = (e, val) => out.push({ e, val });
+    const cl = (r, c) => (r >= 0 && r < rows && c >= 0 && c < cols && clues[r][c] != null)
+      ? clues[r][c] : -1;
+
+    // cantos do tabuleiro: as 2 arestas de BORDA da célula de canto
+    const canto = (r, c, e1, e2) => {
+      const k = cl(r, c);
+      if (k === 3) { add(e1, LINE); add(e2, LINE); }
+      else if (k === 1) { add(e1, EMPTY); add(e2, EMPTY); }
+    };
+    canto(0, 0, hIdx(0, 0), vIdx(0, 0));                                       // sup-esq
+    canto(0, cols - 1, hIdx(0, cols - 1), vIdx(0, cols));                      // sup-dir
+    canto(rows - 1, 0, hIdx(rows, 0), vIdx(rows - 1, 0));                      // inf-esq
+    canto(rows - 1, cols - 1, hIdx(rows, cols - 1), vIdx(rows - 1, cols));     // inf-dir
+
+    // pares de 3 (adjacentes e diagonais)
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (cl(r, c) !== 3) continue;
+      if (cl(r, c + 1) === 3) { add(vIdx(r, c), LINE); add(vIdx(r, c + 2), LINE); }   // 3-3 horizontal: externas
+      if (cl(r + 1, c) === 3) { add(hIdx(r, c), LINE); add(hIdx(r + 2, c), LINE); }   // 3-3 vertical: externas
+      if (cl(r + 1, c + 1) === 3) {                                                   // 3-3 diagonal "\"
+        add(hIdx(r, c), LINE); add(vIdx(r, c), LINE);                                 //   canto sup-esq de (r,c)
+        add(hIdx(r + 2, c + 1), LINE); add(vIdx(r + 1, c + 2), LINE);                 //   canto inf-dir de (r+1,c+1)
+      }
+      if (cl(r + 1, c - 1) === 3) {                                                   // 3-3 diagonal "/"
+        add(hIdx(r, c), LINE); add(vIdx(r, c + 1), LINE);                             //   canto sup-dir de (r,c)
+        add(hIdx(r + 2, c - 1), LINE); add(vIdx(r + 1, c - 1), LINE);                 //   canto inf-esq de (r+1,c-1)
+      }
+    }
+    return out;
+  }
+
+  /**
    * Conta as soluções de um puzzle até um limite, servindo como ORÁCULO DE
    * UNICIDADE: se devolve count === 1 com complete === true, o puzzle tem
    * solução única; count >= 2 é ambíguo; complete === false significa que a
@@ -798,8 +857,14 @@
 
     // Propagação inicial: enfileira todas as células com dica (algumas já
     // forçam arestas de saída) e, se consistente, dispara a busca.
+    // semeia os PADRÕES FIXOS (sólidos) antes de buscar: poda a árvore sem
+    // alterar a contagem de soluções (cada regra vale em toda solução).
+    let okSemente = true;
+    for (const { e, val } of padroesFixos(rows, cols, clues, topo)) {
+      if (state[e] === UNKNOWN && !setEdge(e, val)) { okSemente = false; break; }
+    }
     for (let cel = 0; cel < nCells; cel++) fila.push(cel);
-    if (propaga()) busca();
+    if (okSemente && propaga()) busca();
     return { count: nSol, solutions: solucoes, complete: completo };
   }
 
@@ -1503,6 +1568,13 @@
     for (const k of (seedMarks || [])) { const e = topo.keyToIdx[k]; if (e != null && state[e] === UNKNOWN) setEdge(e, EMPTY, 'seed'); }
     const nSemente = trace.length;
 
+    // PADRÕES FIXOS (busca esperta): as deduções de padrão entram no trace
+    // (aparecem na animação como 'pattern') e a propagação cascateia delas,
+    // deixando pouquíssimo backtracking de verdade para a busca.
+    for (const { e, val } of padroesFixos(rows, cols, clues, topo)) {
+      if (!done && state[e] === UNKNOWN) setEdge(e, val, 'pattern');
+    }
+
     for (let cel = 0; cel < nCells; cel++) fila.push(cel);
     if (!done && propaga()) busca();
     return trace.slice(nSemente);
@@ -1589,6 +1661,7 @@
     makeRng, buildTopology, generateLoop, cluesFromLoop, countSolutions,
     reduceClues, reduceCluesBinaria, reduceCluesCEGAR, reduzDicas,
     generatePuzzle, solveTrace, solveTraceBusca, deduceEmpties, hKey, vKey,
+    padroesFixos,
     UNKNOWN, LINE, EMPTY,
   };
 

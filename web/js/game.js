@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '22';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '23';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
