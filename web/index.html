@@ -72,8 +72,8 @@
         <option value="busca">busca real</option>
       </select>
       <label class="vel" title="Velocidade da animação do solver (passos por segundo)">
-        <span>Velocidade <b id="velVal">15/s</b></span>
-        <input id="velocidade" type="range" min="2" max="120" step="1" value="15" />
+        <span>Velocidade <b id="velVal">10/s</b></span>
+        <input id="velocidade" type="range" min="2" max="120" step="1" value="10" />
       </label>
       <button id="desfazer" title="Desfazer (Ctrl+Z)">↶ Desfazer</button>
       <button id="refazer" title="Refazer (Ctrl+Y)">↷ Refazer</button>
@@ -121,8 +121,8 @@
     <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
   </main>
 
-  <script src="js/core.js?v=21"></script>
-  <script src="js/game.js?v=21"></script>
+  <script src="js/core.js?v=22"></script>
+  <script src="js/game.js?v=22"></script>
   <script>
     // registra o service worker (PWA: instalável + offline)
     if ('serviceWorker' in navigator) {

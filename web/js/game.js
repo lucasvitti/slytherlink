@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '21';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '22';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -638,26 +638,23 @@
 
     $('resolver').textContent = '⏸ Parar';
 
-    // velocidade = passos por segundo (slider). dPasso = ms por passo pedido.
-    // Como o setInterval não roda bem abaixo de ~16ms, para velocidades ALTAS
-    // (passo < 16ms) mantemos o quadro em 16ms e fazemos VÁRIOS passos por quadro
-    // em vez de encurtar o delay. Para velocidades baixas/médias, 1 passo por
-    // quadro no ritmo exato pedido — assim o slider é sempre respeitado.
-    const sps = Math.max(2, +$('velocidade').value || 15);
-    const dPasso = 1000 / sps;
-    let porQuadro = 1, delay;
-    if (dPasso >= 16) { delay = dPasso; }
-    else { delay = 16; porQuadro = Math.max(1, Math.round(16 / dPasso)); }
+    // velocidade = passos por segundo (slider). A TAXA é mantida EXATA = sps em
+    // qualquer ponto da barra: como o setInterval não roda bem abaixo de ~16ms,
+    // escolhemos quantos passos por quadro (porQuadro) para o delay ficar >= 16ms
+    // e então delay = porQuadro/sps. Ex.: 10/s -> 1 passo a cada 100ms; 120/s ->
+    // 2 passos a cada 16,7ms (= 120/s, não “arredondado”).
+    const sps = Math.max(2, +$('velocidade').value || 10);
+    const QUADRO_MIN = 16;
+    let porQuadro = Math.max(1, Math.ceil(sps * QUADRO_MIN / 1000));
+    let delay = porQuadro * 1000 / sps;
     // segurança só p/ traços ENORMES (tabuleiros gigantes): nunca passar de ~2min
-    // no total — e isso só ACELERA (mais passos por quadro), nunca desacelera o
-    // que o usuário pediu.
+    // no total — e isso só ACELERA (mais passos por quadro), nunca desacelera.
     const MAX_TOTAL = 120000;
     if ((trace.length / porQuadro) * delay > MAX_TOTAL) {
       porQuadro = Math.ceil(trace.length * delay / MAX_TOTAL);
     }
-    // câmera que segue o solver: transition no transform p/ o pan deslizar
-    // (quanto mais rápido o solver, mais curto o deslize)
-    const durCam = Math.min(700, Math.max(250, dPasso * 4));
+    // câmera que segue o solver: glide mais curto quanto mais rápido o solver
+    const durCam = Math.min(700, Math.max(250, (1000 / sps) * 4));
     $('tabuleiro').style.transition = 'transform ' + durCam + 'ms ease-out';
     let i = 0;
     S.anim = setInterval(() => {
