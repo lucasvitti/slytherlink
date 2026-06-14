@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '13';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '14';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -42,6 +42,7 @@
     edgeEls: {}, markEls: {}, clueEls: null,   // refs dos elementos SVG
     geo: null, won: false,                     // geometria e flag de vitória
     zoom: 1,                    // fator de zoom do tabuleiro (1 = tamanho base)
+    panX: 0, panY: 0,           // deslocamento (pan/câmera) do tabuleiro, em px
     gesturing: false,           // true durante pan/pinça multitoque (suspende o traço)
     slots: [null, null, null, null, null],  // 5 checkpoints (estados salvos)
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
@@ -98,20 +99,36 @@
   const ZOOM_MIN = 0.25, ZOOM_MAX = 5;
 
   /**
-   * Aplica o zoom atual. O viewBox (coordenadas lógicas) fica fixo; só o
-   * tamanho RENDERIZADO do SVG muda — então o desenho continua nítido (vetor)
-   * e o contêiner .scroll mostra barras de rolagem quando o tabuleiro
-   * ultrapassa a viewport.
+   * Aplica a "câmera" (zoom + pan). O zoom muda só o tamanho RENDERIZADO do SVG
+   * (viewBox fixo → desenho nítido) e o pan é um translate(). O palco tem
+   * overflow:hidden, então NÃO há barras de rolagem: navega-se arrastando.
    */
-  function aplicaZoom() {
+  function aplicaView() {
     const svg = $('tabuleiro');
     svg.setAttribute('width', Math.round(S.geo.w * S.zoom));
     svg.setAttribute('height', Math.round(S.geo.h * S.zoom));
     // espessura das linhas escala como 1/√zoom (sub-linear): ao ampliar, a
     // linha cresce mais devagar que as células e não vira "salsicha".
     svg.style.setProperty('--sw', (1 / Math.sqrt(S.zoom)).toFixed(3));
+    svg.style.transform = 'translate(' + Math.round(S.panX) + 'px,' + Math.round(S.panY) + 'px)';
     const pct = $('zoomPct');
     if (pct) pct.textContent = Math.round(S.zoom * 100) + '%';
+  }
+
+  // Centraliza o tabuleiro no palco (ao gerar e no "Ajustar").
+  function centraliza() {
+    const r = $('scroll').getBoundingClientRect();
+    S.panX = (r.width - S.geo.w * S.zoom) / 2;
+    S.panY = (r.height - S.geo.h * S.zoom) / 2;
+    aplicaView();
+  }
+
+  // Oculta/mostra a barra superior (libera mais área para o tabuleiro).
+  function toggleTopbar() {
+    const oculta = document.querySelector('.topbar').classList.toggle('oculta');
+    const btn = $('toggleTop');
+    if (btn) { btn.textContent = oculta ? '▾' : '▴'; btn.title = oculta ? 'Mostrar a barra' : 'Ocultar a barra'; }
+    if (S.puzzle) requestAnimationFrame(centraliza);
   }
 
   /**
@@ -121,30 +138,27 @@
    */
   function setZoom(z, ax, ay) {
     if (!S.puzzle) return;
-    const sc = $('scroll');
-    const r = sc.getBoundingClientRect();
+    const r = $('scroll').getBoundingClientRect();
     if (ax == null) { ax = r.left + r.width / 2; ay = r.top + r.height / 2; }
     z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
     const old = S.zoom;
     if (Math.abs(z - old) < 1e-4) return;
     // coordenada de conteúdo (não-escalada) sob a âncora
-    const cx = (sc.scrollLeft + (ax - r.left)) / old;
-    const cy = (sc.scrollTop + (ay - r.top)) / old;
+    const cx = (ax - r.left - S.panX) / old;
+    const cy = (ay - r.top - S.panY) / old;
     S.zoom = z;
-    aplicaZoom();
-    sc.scrollLeft = cx * z - (ax - r.left);
-    sc.scrollTop = cy * z - (ay - r.top);
+    S.panX = ax - r.left - cx * z;
+    S.panY = ay - r.top - cy * z;
+    aplicaView();
   }
 
-  // Ajusta o zoom para o tabuleiro inteiro caber na viewport de rolagem.
+  // Ajusta o zoom para o tabuleiro inteiro caber no palco e centraliza.
   function zoomFit() {
     if (!S.puzzle) return;
-    const sc = $('scroll');
-    const r = sc.getBoundingClientRect();
+    const r = $('scroll').getBoundingClientRect();
     const z = Math.min(r.width / S.geo.w, r.height / S.geo.h) * 0.97;
     S.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
-    aplicaZoom();
-    sc.scrollLeft = 0; sc.scrollTop = 0;
+    centraliza();
   }
 
   // -------------------------------------------------- pan (arrastar a viewport)
@@ -162,13 +176,14 @@
     sc.addEventListener('mousedown', (e) => {
       if (e.button !== 1) return;
       e.preventDefault();                  // evita o autoscroll do botão do meio
-      mid = { x: e.clientX, y: e.clientY, sl: sc.scrollLeft, st: sc.scrollTop };
+      mid = { x: e.clientX, y: e.clientY, px: S.panX, py: S.panY };
       sc.classList.add('panning');
     });
     window.addEventListener('mousemove', (e) => {
       if (!mid) return;
-      sc.scrollLeft = mid.sl - (e.clientX - mid.x);
-      sc.scrollTop = mid.st - (e.clientY - mid.y);
+      S.panX = mid.px + (e.clientX - mid.x);
+      S.panY = mid.py + (e.clientY - mid.y);
+      aplicaView();
     });
     window.addEventListener('mouseup', () => {
       if (mid) { mid = null; sc.classList.remove('panning'); }
@@ -194,8 +209,8 @@
         const c = centroide(), r = sc.getBoundingClientRect();
         // ponto de conteúdo (não-escalado) sob o centróide no início do gesto
         g = { d0: c.d, z0: S.zoom,
-              cx: (sc.scrollLeft + (c.x - r.left)) / S.zoom,
-              cy: (sc.scrollTop + (c.y - r.top)) / S.zoom };
+              cx: (c.x - r.left - S.panX) / S.zoom,
+              cy: (c.y - r.top - S.panY) / S.zoom };
       }
     });
     sc.addEventListener('pointermove', (e) => {
@@ -206,10 +221,10 @@
       const c = centroide(), r = sc.getBoundingClientRect();
       const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, g.z0 * (c.d / g.d0)));
       S.zoom = z;
-      aplicaZoom();
       // mantém o ponto de conteúdo ancorado sob o centróide atual (pan + zoom)
-      sc.scrollLeft = g.cx * z - (c.x - r.left);
-      sc.scrollTop = g.cy * z - (c.y - r.top);
+      S.panX = c.x - r.left - g.cx * z;
+      S.panY = c.y - r.top - g.cy * z;
+      aplicaView();
     }, { passive: false });
     const fimToque = (e) => {
       if (e.pointerType !== 'touch') return;
@@ -266,6 +281,7 @@
     S.slots = [null, null, null, null, null];   // checkpoints são por tabuleiro
     atualizaCheckpoints();
     buildSvg(); refresh();
+    zoomFit();                                   // ajusta e centraliza no palco
     setStatus('Tabuleiro ' + p.rows + '×' + p.cols + ' — dificuldade ' + p.dificuldade + '.');
     const metodoTxt = (p.metodo && p.dificuldade !== 'nenhuma') ? ' · ' + p.metodo : '';
     const tempoTxt = (p.ms != null) ? ' · ' + p.ms + ' ms' : '';
@@ -283,7 +299,7 @@
     svg.classList.remove('resolvido');
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     svg.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
-    aplicaZoom();   // define width/height = geometria × zoom (viewBox fixo)
+    aplicaView();   // define width/height (zoom) + translate (pan)
     S.edgeEls = {}; S.markEls = {};
 
     const { rows, cols, clues } = S.puzzle;
@@ -820,11 +836,19 @@
     $('zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
     $('zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
     $('zoomFit').addEventListener('click', zoomFit);
+    $('toggleTop').addEventListener('click', toggleTopbar);
+    let rt; window.addEventListener('resize', () => {
+      clearTimeout(rt); rt = setTimeout(() => { if (S.puzzle) centraliza(); }, 150);
+    });
     setupPan();
     $('scroll').addEventListener('wheel', (e) => {
-      if (!e.ctrlKey) return;                 // roda normal = rolagem
       e.preventDefault();
-      setZoom(S.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+      if (e.ctrlKey) {                                  // Ctrl+roda = zoom no cursor
+        setZoom(S.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+      } else if (S.puzzle) {                            // roda normal = pan (sem barras)
+        if (e.shiftKey) S.panX -= e.deltaY; else { S.panX -= e.deltaX; S.panY -= e.deltaY; }
+        aplicaView();
+      }
     }, { passive: false });
     document.addEventListener('keydown', (e) => {
       const campo = /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '');
@@ -833,14 +857,15 @@
       else if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); }
       else if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); }
       else if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); }
-      // setas: arrastam (rolam) o tabuleiro; Shift = passo maior
+      // setas: arrastam (pan) o tabuleiro; Shift = passo maior
       else if (!campo && e.key.indexOf('Arrow') === 0) {
         e.preventDefault();
-        const sc = $('scroll'), step = e.shiftKey ? 220 : 70;
-        if (e.key === 'ArrowUp') sc.scrollTop -= step;
-        else if (e.key === 'ArrowDown') sc.scrollTop += step;
-        else if (e.key === 'ArrowLeft') sc.scrollLeft -= step;
-        else if (e.key === 'ArrowRight') sc.scrollLeft += step;
+        const step = e.shiftKey ? 220 : 70;
+        if (e.key === 'ArrowUp') S.panY += step;
+        else if (e.key === 'ArrowDown') S.panY -= step;
+        else if (e.key === 'ArrowLeft') S.panX += step;
+        else if (e.key === 'ArrowRight') S.panX -= step;
+        aplicaView();
       }
     });
     gerar();
