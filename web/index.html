@@ -96,9 +96,13 @@
 
     <div id="status" class="status floating-top"></div>
 
-    <div id="minimap" class="minimap oculto" title="Arraste para mover o mapa">
-      <div class="mini-grip">⠿ mapa</div>
+    <div id="minimap" class="minimap oculto">
+      <div class="mini-bar" title="Arraste para mover o mapa">
+        <span class="mini-titulo">⠿ mapa</span>
+        <button id="miniColapsar" class="mini-btn" type="button" title="Recolher o mapa">▾</button>
+      </div>
       <svg id="miniSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="mini-resize" title="Arraste para redimensionar"></div>
     </div>
 
     <div class="checkpoints floating-bl" title="Salve até 5 estados do tabuleiro e volte a eles">
@@ -121,8 +125,8 @@
     <div id="overlay" class="overlay oculto"><div class="spinner"></div><span id="overlayTexto">Gerando…</span></div>
   </main>
 
-  <script src="js/core.js?v=23"></script>
-  <script src="js/game.js?v=23"></script>
+  <script src="js/core.js?v=24"></script>
+  <script src="js/game.js?v=24"></script>
   <script>
     // registra o service worker (PWA: instalável + offline)
     if ('serviceWorker' in navigator) {

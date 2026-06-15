@@ -25,7 +25,7 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);   // atalho p/ getElementById
   const HOLD_MS = 280;                              // limiar tap vs. hold (ms)
-  const VERSION = '23';   // bump quando core.js/worker.js mudarem (cache-busting)
+  const VERSION = '24';   // bump quando core.js/worker.js mudarem (cache-busting)
 
   // paleta de cores dos segmentos (vivas, sobre fundo escuro)
   const PALETA = ['#4f9dff', '#41d18f', '#33c7c7', '#f2c14e', '#e86af0',
@@ -48,6 +48,7 @@
     anim: null, focoEl: null,   // animação do solucionador (timer + aresta em foco)
     camRAF: null,               // rAF da câmera animada (recuo até 100% ao vencer)
     miniEls: null,              // refs do minimapa { board, lines, visor }
+    miniMax: 168,               // maior lado do minimapa em px (redimensionável)
   };
 
   // Web Worker preguiçoso: criado na 1ª geração e reaproveitado.
@@ -244,11 +245,8 @@
   function montaMinimapa() {
     const mini = $('miniSvg');
     while (mini.firstChild) mini.removeChild(mini.firstChild);
-    const MAX = 168;                                   // maior lado do mapa, em px
-    const s = MAX / Math.max(S.geo.w, S.geo.h);
-    mini.setAttribute('width', Math.round(S.geo.w * s));
-    mini.setAttribute('height', Math.round(S.geo.h * s));
     mini.setAttribute('viewBox', '0 0 ' + S.geo.w + ' ' + S.geo.h);
+    ajustaTamanhoMini();                               // dimensiona conforme S.miniMax
     const board = document.createElementNS(SVGNS, 'rect');
     board.setAttribute('x', 0); board.setAttribute('y', 0);
     board.setAttribute('width', S.geo.w); board.setAttribute('height', S.geo.h);
@@ -262,9 +260,27 @@
     mini.appendChild(board); mini.appendChild(lines); mini.appendChild(visor);
     S.miniEls = { board, lines, visor };
   }
+  // dimensiona o SVG do minimapa a partir de S.miniMax (mantém o aspecto do board).
+  // Define o tamanho em CSS (não só no atributo) p/ o painel ENVOLVER o mapa —
+  // atributo de SVG não conta de forma confiável no cálculo de tamanho do pai.
+  function ajustaTamanhoMini() {
+    if (!S.geo) return;
+    const mini = $('miniSvg');
+    const s = S.miniMax / Math.max(S.geo.w, S.geo.h);
+    const w = Math.round(S.geo.w * s), h = Math.round(S.geo.h * s);
+    mini.setAttribute('width', w); mini.setAttribute('height', h);
+    mini.style.width = w + 'px'; mini.style.height = h + 'px';
+  }
+  // sincroniza o botão de recolher/expandir com o estado atual
+  function atualizaColapsarBtn() {
+    const rec = $('minimap').classList.contains('recolhido');
+    const b = $('miniColapsar');
+    if (b) { b.textContent = rec ? '▸' : '▾'; b.title = rec ? 'Expandir o mapa' : 'Recolher o mapa'; }
+  }
   // redesenha as arestas traçadas no minimapa (a partir de S.lines)
   function desenhaLinhasMini() {
-    if (!S.miniEls || $('minimap').classList.contains('oculto')) return;
+    const mm = $('minimap');
+    if (!S.miniEls || mm.classList.contains('oculto') || mm.classList.contains('recolhido')) return;
     let d = '';
     for (const key of S.lines) {
       const dots = edgeDots(key);
@@ -293,30 +309,52 @@
     if (estavaOculto) desenhaLinhasMini();             // acabou de aparecer: sincroniza
   }
   /**
-   * Liga a interação do minimapa: arrastar o painel (em QUALQUER ponto dele) o
-   * reposiciona sobre o palco — o mapa é só um overview móvel, não navega o
-   * tabuleiro (para isso há a roda/arrastar/setas no próprio tabuleiro). Usa
-   * pointer events (mouse e toque) e segue o ponteiro pelo window.
+   * Liga a interação do minimapa (pointer events → mouse e toque):
+   *  - arrastar a BARRA de título reposiciona o painel sobre o palco;
+   *  - arrastar a ALÇA do canto redimensiona o mapa (ajusta S.miniMax);
+   *  - o botão recolhe/expande (no mobile já nasce recolhido — ver init).
+   * O mapa é um overview móvel: não navega o tabuleiro (isso é na própria área).
    */
   function setupMinimapa() {
-    const mm = $('minimap');
-    let mover = null;
-    mm.addEventListener('pointerdown', (e) => {
+    const mm = $('minimap'), bar = mm.querySelector('.mini-bar'),
+          alca = mm.querySelector('.mini-resize');
+    let mover = null, redim = null;
+
+    bar.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.mini-btn')) return;        // o botão recolher não arrasta
       e.preventDefault();
       const r = mm.getBoundingClientRect();
       mover = { dx: e.clientX - r.left, dy: e.clientY - r.top };
     });
-    window.addEventListener('pointermove', (e) => {
-      if (!mover) return;
-      const pr = $('palco').getBoundingClientRect();
-      let x = e.clientX - pr.left - mover.dx, y = e.clientY - pr.top - mover.dy;
-      x = Math.max(0, Math.min(pr.width - mm.offsetWidth, x));
-      y = Math.max(0, Math.min(pr.height - mm.offsetHeight, y));
-      mm.style.left = x + 'px'; mm.style.top = y + 'px'; mm.style.right = 'auto';
+    alca.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      // ancora à esquerda/topo p/ crescer rumo ao ponteiro (e não "fugir" dele)
+      const r = mm.getBoundingClientRect(), pr = $('palco').getBoundingClientRect();
+      mm.style.left = (r.left - pr.left) + 'px'; mm.style.top = (r.top - pr.top) + 'px'; mm.style.right = 'auto';
+      redim = { x: e.clientX, y: e.clientY, max: S.miniMax };
     });
-    const solta = () => { mover = null; };
+    window.addEventListener('pointermove', (e) => {
+      if (mover) {
+        const pr = $('palco').getBoundingClientRect();
+        let x = e.clientX - pr.left - mover.dx, y = e.clientY - pr.top - mover.dy;
+        x = Math.max(0, Math.min(pr.width - mm.offsetWidth, x));
+        y = Math.max(0, Math.min(pr.height - mm.offsetHeight, y));
+        mm.style.left = x + 'px'; mm.style.top = y + 'px'; mm.style.right = 'auto';
+      } else if (redim) {
+        const d = Math.max(e.clientX - redim.x, e.clientY - redim.y);
+        S.miniMax = Math.max(70, Math.min(360, redim.max + d));
+        ajustaTamanhoMini();
+      }
+    });
+    const solta = () => { mover = null; redim = null; };
     window.addEventListener('pointerup', solta);
     window.addEventListener('pointercancel', solta);
+
+    $('miniColapsar').addEventListener('click', () => {
+      mm.classList.toggle('recolhido');
+      atualizaColapsarBtn();
+      if (!mm.classList.contains('recolhido')) desenhaLinhasMini();   // redesenha ao expandir
+    });
   }
 
   // -------------------------------------------------- pan (arrastar a viewport)
@@ -1034,6 +1072,12 @@
     $('zoomFit').addEventListener('click', zoomFit);
     $('toggleTop').addEventListener('click', toggleTopbar);
     setupMinimapa();
+    // em telas pequenas (mobile) o mapa nasce menor e RECOLHIDO (não come a tela)
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      S.miniMax = 116;
+      $('minimap').classList.add('recolhido');
+    }
+    atualizaColapsarBtn();
     // leitura ao vivo da velocidade (passos por segundo)
     const vel = $('velocidade'), velVal = $('velVal');
     const mostraVel = () => { velVal.textContent = vel.value + '/s'; };
