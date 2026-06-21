@@ -880,6 +880,180 @@ def reduz_dicas(tabuleiro
 
 
 # =============================================================================
+# Redução de dicas — métodos do site (guloso / binária / CEGAR) com controle
+# de dificuldade. Operam sobre a MATRIZ de dicas completa (`alvo`) + a `solucao`
+# (frozenset de ids de aresta), espelhando core.js (reduceClues /
+# reduceCluesBinaria / reduceCluesCEGAR). O oráculo de unicidade já usa a
+# "busca esperta" (padrões fixos), então toda a redução é acelerada por eles.
+# =============================================================================
+_FRAC_VOLTA = {'dificil': 0.0, 'medio': 0.4, 'facil': 0.75}
+
+
+def _devolve_dicas(puzzle, alvo, removidas, rs, dificuldade):
+    """Devolve uma fração das dicas removidas conforme a dificuldade (mais
+    fácil = mais dicas de volta). Unicidade preservada (qualquer superconjunto
+    de um conjunto único continua único). Muta e retorna `puzzle`."""
+    frac = _FRAC_VOLTA.get(dificuldade, 0.4)
+    removidas = list(removidas)
+    rs.shuffle(removidas)
+    for i in range(int(round(frac * len(removidas)))):
+        l, c = removidas[i]
+        puzzle[l, c] = alvo[l, c]
+    return puzzle
+
+
+def _unico(lin, col, puzzle, solucao, max_nos, motor):
+    """True se `puzzle` tem solução única E o solver concluiu (completa).
+    Como remover dicas mantém o alvo como solução, count==1 ⇒ a única é o alvo."""
+    s = _novo_oraculo(lin, col, puzzle, max_nos, motor, solucao)
+    n, _ = s.conta_solucoes(limite=2)
+    return n == 1 and s.completa
+
+
+def reduz_guloso(lin, col, alvo, solucao, dificuldade='medio',
+                 max_nos=40000, motor='python', seed=None):
+    """REDUÇÃO GULOSA (método padrão do site): tenta remover cada dica numa
+    ordem aleatória, mantendo a remoção se o puzzle continuar único; ao final
+    devolve uma fração das removidas conforme a dificuldade."""
+    rs = np.random.RandomState(seed)
+    alvo = np.asarray(alvo).astype(int)
+    puzzle = alvo.copy()
+    celulas = [(l, c) for l in range(lin - 1) for c in range(col - 1)]
+    rs.shuffle(celulas)
+    removidas = []
+    for l, c in celulas:
+        if puzzle[l, c] < 0:
+            continue
+        bak = puzzle[l, c]
+        puzzle[l, c] = -1
+        if _unico(lin, col, puzzle, solucao, max_nos, motor):
+            removidas.append((l, c))
+        else:
+            puzzle[l, c] = bak
+    return _devolve_dicas(puzzle, alvo, removidas, rs, dificuldade)
+
+
+def reduz_binaria(lin, col, alvo, solucao, dificuldade='medio',
+                  max_nos=40000, motor='python', seed=None):
+    """REDUÇÃO POR BUSCA BINÁRIA (rápida): fixada uma ordem, P(k)='remover as k
+    primeiras mantém único' é monótona, então acha-se o maior k por busca
+    binária (O(log n) chamadas do solver). Reembaralha a cada rodada até nada
+    mais sair. Costuma deixar mais dicas que o guloso, mas é bem mais rápido."""
+    rs = np.random.RandomState(seed)
+    alvo = np.asarray(alvo).astype(int)
+    puzzle = alvo.copy()
+    removidas = []
+    progrediu = True
+    while progrediu:
+        progrediu = False
+        restantes = [(l, c) for l in range(lin - 1) for c in range(col - 1)
+                     if puzzle[l, c] >= 0]
+        rs.shuffle(restantes)
+
+        def unico_removendo(k):
+            p = puzzle.copy()
+            for i in range(k):
+                l, c = restantes[i]
+                p[l, c] = -1
+            return _unico(lin, col, p, solucao, max_nos, motor)
+
+        lo, hi = 0, len(restantes)
+        while lo < hi:
+            m = (lo + hi + 1) // 2          # teto
+            if unico_removendo(m):
+                lo = m
+            else:
+                hi = m - 1
+        if lo > 0:
+            for i in range(lo):
+                l, c = restantes[i]
+                puzzle[l, c] = -1
+                removidas.append((l, c))
+            progrediu = True
+    return _devolve_dicas(puzzle, alvo, removidas, rs, dificuldade)
+
+
+def reduz_cegar(lin, col, alvo, solucao, dificuldade='medio',
+                max_nos=40000, motor='python', seed=None, semente=0.5):
+    """REDUÇÃO POR CEGAR (bottom-up, guiada por contraexemplo): parte de poucas
+    dicas (fração `semente`) e adiciona a dica verdadeira onde um contraexemplo
+    diverge do alvo, até provar unicidade; pente-fino guloso final + devolve por
+    dificuldade. Espelha core.js reduceCluesCEGAR (variante matriz-based, à parte
+    do reduz_dicas() original baseado em Tabuleiro)."""
+    rs = np.random.RandomState(seed)
+    alvo = np.asarray(alvo).astype(int)
+    alvo_sol = solucao if isinstance(solucao, frozenset) else frozenset(solucao)
+    R, C = lin - 1, col - 1
+    puzzle = np.where(rs.random_sample((R, C)) < semente, alvo, -1)
+    cache = []
+
+    def consistente(cts):
+        m = puzzle >= 0
+        return bool(np.all(cts[m] == puzzle[m]))
+
+    def adiciona(cts):
+        op = [(l, c) for l in range(R) for c in range(C)
+              if puzzle[l, c] < 0 and cts[l, c] != alvo[l, c]]
+        if not op:
+            return False
+        l, c = op[rs.randint(len(op))]
+        puzzle[l, c] = alvo[l, c]
+        return True
+
+    def contraexemplo():
+        for cts in cache:
+            if consistente(cts):
+                return cts
+        s = _novo_oraculo(lin, col, puzzle, max_nos, motor, alvo_sol)
+        _, solucoes = s.conta_solucoes(limite=2)
+        alts = [x for x in solucoes if x != alvo_sol]
+        if alts:
+            m = sv.dicas_de_solucao(lin, col, alts[0])
+            cache.append(m)
+            return m
+        if s.completa:
+            return None
+        livres = [(l, c) for l in range(R) for c in range(C) if puzzle[l, c] < 0]
+        if not livres:
+            return None
+        l, c = livres[rs.randint(len(livres))]
+        puzzle[l, c] = alvo[l, c]
+        return contraexemplo()
+
+    guard = 0
+    while guard < R * C * 4:
+        guard += 1
+        cts = contraexemplo()
+        if cts is None or not adiciona(cts):
+            break
+
+    celulas = [(l, c) for l in range(R) for c in range(C) if puzzle[l, c] >= 0]
+    rs.shuffle(celulas)
+    removidas = []
+    for l, c in celulas:
+        bak = puzzle[l, c]
+        puzzle[l, c] = -1
+        if _unico(lin, col, puzzle, solucao, max_nos, motor):
+            removidas.append((l, c))
+        else:
+            puzzle[l, c] = bak
+    return _devolve_dicas(puzzle, alvo, removidas, rs, dificuldade)
+
+
+def reduz_dicas_metodo(metodo, lin, col, alvo, solucao, dificuldade='medio',
+                       max_nos=40000, motor='python', seed=None):
+    """Despacha para o método de redução do site: 'guloso' (padrão), 'binaria'
+    ou 'cegar'. Recebe o mapa completo `alvo` (matriz (lin-1)x(col-1)) e a
+    `solucao` (frozenset de ids de aresta) e devolve a matriz reduzida na
+    dificuldade pedida."""
+    if metodo == 'binaria':
+        return reduz_binaria(lin, col, alvo, solucao, dificuldade, max_nos, motor, seed)
+    if metodo == 'cegar':
+        return reduz_cegar(lin, col, alvo, solucao, dificuldade, max_nos, motor, seed)
+    return reduz_guloso(lin, col, alvo, solucao, dificuldade, max_nos, motor, seed)
+
+
+# =============================================================================
 # Gera um puzzle completo: tabuleiro + redução de dicas + dificuldade
 # =============================================================================
 def gera_Puzzle(densidade : float = 0.3

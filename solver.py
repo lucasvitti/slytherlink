@@ -81,6 +81,70 @@ def dicas_de_solucao(lin, col, solucao):
     return dicas
 
 
+def padroes_fixos(lin, col, dicas):
+    """
+    PADRÕES FIXOS — deduções que dependem só das dicas e valem em TODA solução
+    (sólidas), usadas para SEMEAR a busca (e acelerar a verificação de
+    unicidade). Como cada regra é verdadeira em toda solução, semear nunca
+    remove uma solução: a contagem é preservada.
+
+    Teoremas locais clássicos do Slitherlink:
+      - dica 3 num CANTO do tabuleiro: as 2 arestas de borda são DENTRO;
+      - dica 1 num CANTO: as 2 arestas de borda são FORA;
+      - dois 3 na DIAGONAL: em cada um, as 2 arestas do canto OPOSTO ao vértice
+        compartilhado são DENTRO;
+      - dois 3 LADO A LADO (h/v): as 2 arestas EXTERNAS são DENTRO (a do MEIO
+        NÃO é forçada — dois 3 isolados formam um retângulo com o meio vazio).
+
+    `dicas` é a matriz (lin-1)x(col-1) (>=0 dica, <0 sem dica). Devolve uma
+    lista de (id_aresta, valor) com valor em {DENTRO, FORA}.
+    """
+    R, C = lin - 1, col - 1   # nº de células (linhas, colunas)
+    out = []
+
+    def cl(l, c):
+        if 0 <= l < R and 0 <= c < C:
+            v = int(dicas[l][c])
+            return v if v >= 0 else -1
+        return -1
+
+    def H(l, c):
+        return id_aresta_horizontal(l, c, col)
+
+    def V(l, c):
+        return id_aresta_vertical(l, c, lin, col)
+
+    def canto(l, c, e1, e2):
+        k = cl(l, c)
+        if k == 3:
+            out.append((e1, DENTRO)); out.append((e2, DENTRO))
+        elif k == 1:
+            out.append((e1, FORA)); out.append((e2, FORA))
+
+    # cantos do tabuleiro: as 2 arestas de borda da célula de canto
+    canto(0, 0, H(0, 0), V(0, 0))
+    canto(0, C - 1, H(0, C - 1), V(0, col - 1))
+    canto(R - 1, 0, H(lin - 1, 0), V(R - 1, 0))
+    canto(R - 1, C - 1, H(lin - 1, C - 1), V(R - 1, col - 1))
+
+    # pares de 3 (adjacentes e diagonais)
+    for l in range(R):
+        for c in range(C):
+            if cl(l, c) != 3:
+                continue
+            if cl(l, c + 1) == 3:            # 3-3 horizontal: arestas externas
+                out.append((V(l, c), DENTRO)); out.append((V(l, c + 2), DENTRO))
+            if cl(l + 1, c) == 3:            # 3-3 vertical: arestas externas
+                out.append((H(l, c), DENTRO)); out.append((H(l + 2, c), DENTRO))
+            if cl(l + 1, c + 1) == 3:        # 3-3 diagonal "\"
+                out.append((H(l, c), DENTRO)); out.append((V(l, c), DENTRO))
+                out.append((H(l + 2, c + 1), DENTRO)); out.append((V(l + 1, c + 2), DENTRO))
+            if cl(l + 1, c - 1) == 3:        # 3-3 diagonal "/"
+                out.append((H(l, c), DENTRO)); out.append((V(l, c + 1), DENTRO))
+                out.append((H(l + 2, c - 1), DENTRO)); out.append((V(l + 1, c - 1), DENTRO))
+    return out
+
+
 class Solver:
     """
     Solver para um tabuleiro lin x col com a matriz de dicas informada.
@@ -92,11 +156,13 @@ class Solver:
     resolve() -- o estado interno não é reiniciado entre chamadas.
     """
 
-    def __init__(self, lin, col, dicas, max_nos=60000):
+    def __init__(self, lin, col, dicas, max_nos=60000, semear=True):
         self.lin = lin
         self.col = col
         self.max_nos = max_nos
+        self.semear = semear   # semear padrões fixos antes de propagar/buscar
         dicas = np.asarray(dicas).astype(int)
+        self._dicas = dicas    # guardado p/ derivar os padrões fixos
 
         nH = lin*(col-1)
         nE = nH + (lin-1)*col
@@ -198,6 +264,17 @@ class Solver:
         while pai[x] != x:
             x = pai[x]
         return x
+
+    def _semeia_padroes(self):
+        """
+        Aplica os PADRÕES FIXOS (busca esperta): arestas forçadas pelas dicas
+        que valem em toda solução. Sólido, então não remove soluções. Retorna
+        False em contradição (puzzle insatisfatível).
+        """
+        for e, valor in padroes_fixos(self.lin, self.col, self._dicas):
+            if self.estado[e] == DESCONHECIDA and not self._set(e, valor):
+                return False
+        return True
 
     def _set(self, e, valor):
         """
@@ -487,6 +564,9 @@ class Solver:
         limite) e solucoes é a lista dos conjuntos de ids de arestas de
         cada solução.
         """
+        # busca esperta: semeia os padrões fixos antes de propagar/buscar
+        if self.semear and not self._semeia_padroes():
+            return self.num_solucoes, self.solucoes   # contradição: 0 soluções
         self.fila.extend((_CELULA, cel) for cel in self.ids_celulas)
         if self._propaga():
             self._busca(limite)
