@@ -1062,30 +1062,52 @@ def gera_Puzzle(densidade : float = 0.3
                 ,max_nos  : int   = 15000
                 ,motor    : str   = 'auto'
                 ,seed     : int   = None
+                ,dificuldade : str = None
+                ,metodo   : str   = 'guloso'
                 ,verbose  : bool  = False
                 ,**kwargs):
     """
     Gera um puzzle de Slitherlink completo: tabuleiro com caminho fechado
-    (gera_Tabuleiro2), redução das dicas mantendo solução única
-    (reduz_dicas) e avaliação da dificuldade.
+    (gera_Tabuleiro2), redução das dicas mantendo solução única e avaliação
+    (ou definição) da dificuldade.
+
+    Há dois modos, conforme o parâmetro `dificuldade`:
+
+      - `dificuldade=None` (padrão): redução MINIMAL via reduz_dicas() (CEGAR
+        baseado em Tabuleiro, com simetria opcional) e a dificuldade é então
+        ESTIMADA por avalia_dificuldade() -- é o comportamento original.
+      - `dificuldade` em {'facil','medio','dificil'}: usa os métodos do site
+        (reduz_dicas_metodo, escolhido por `metodo`), que removem as dicas e
+        devolvem uma fração conforme a dificuldade ALVO -- a dificuldade vira
+        ENTRADA (como no jogo). `simetria` não se aplica nesse modo.
 
     Parameters
     ----------
     densidade : float, optional
         Densidade alvo do caminho. Padrão é 0.3
     simetria, minimiza, verbose :
-        Consultar reduz_dicas()
+        Consultar reduz_dicas() (só no modo `dificuldade=None`).
+    max_nos : int, optional
+        Orçamento de nós do solver puro-Python. Padrão 15000.
+    motor : str, optional
+        'auto' | 'cpsat' | 'python' (ver _novo_oraculo). Padrão 'auto'.
     seed : int, optional
-        Seed do numpy.random
+        Seed do numpy.random / dos métodos de redução.
+    dificuldade : str, optional
+        None -> estima a dificuldade (modo original); 'facil'|'medio'|'dificil'
+        -> alvo passado aos métodos do site. Padrão None.
+    metodo : str, optional
+        Método de redução quando `dificuldade` é dada: 'guloso' (padrão),
+        'binaria' ou 'cegar'. Padrão 'guloso'.
     **kwargs :
         Variáveis para criação do tabuleiro (lin, col)
 
     Returns
     -------
-    Lista [tabuleiro, puzzle, dificuldade]: o tabuleiro com o caminho
-    solução (tabuleiro.dicas mantém o mapa completo), a matriz de dicas
-    do puzzle (-1 nas células sem dica) e a dificuldade estimada
-    ('facil', 'medio' ou 'dificil').
+    Lista [tabuleiro, puzzle, dificuldade]: o tabuleiro com o caminho solução
+    (tabuleiro.dicas mantém o mapa completo), a matriz de dicas do puzzle (-1
+    nas células sem dica) e a dificuldade -- estimada (modo None) ou a alvo
+    pedida.
 
     Notes
     -----
@@ -1100,23 +1122,43 @@ def gera_Puzzle(densidade : float = 0.3
                                           ,dicas=True
                                           ,seed=seed
                                           ,**kwargs)
-        try:
-            puzzle = reduz_dicas(tabuleiro
-                                 ,simetria=simetria
-                                 ,minimiza=minimiza
-                                 ,max_nos=max_nos
-                                 ,motor=motor
-                                 ,verbose=verbose)
-        except ValueError:
-            # Mapa completo ambíguo: tenta outro tabuleiro
+        lin, col = tabuleiro.lin, tabuleiro.col
+
+        if dificuldade is None:
+            # Modo original: redução minimal (CEGAR) + dificuldade estimada
+            try:
+                puzzle = reduz_dicas(tabuleiro
+                                     ,simetria=simetria
+                                     ,minimiza=minimiza
+                                     ,max_nos=max_nos
+                                     ,motor=motor
+                                     ,verbose=verbose)
+            except ValueError:
+                if seed is not None:
+                    seed += 1
+                if verbose:
+                    print('mapa completo ambíguo, gerando outro tabuleiro')
+                continue
+            dif = sv.avalia_dificuldade(lin, col, puzzle)
+            return [tabuleiro, puzzle, dif]
+
+        # Modo dificuldade-alvo: métodos do site (guloso/binaria/cegar).
+        # Confere a unicidade do mapa completo (igual ao reduz_dicas).
+        alvo = tabuleiro.dicas.astype(int)
+        solucao = sv.arestas_do_tabuleiro(tabuleiro)
+        n, _ = _novo_oraculo(lin, col, alvo, max_nos, motor,
+                             solucao).conta_solucoes(limite=2)
+        if n != 1:
             if seed is not None:
                 seed += 1
             if verbose:
                 print('mapa completo ambíguo, gerando outro tabuleiro')
             continue
-        dificuldade = sv.avalia_dificuldade(tabuleiro.lin
-                                            ,tabuleiro.col
-                                            ,puzzle)
+        puzzle = reduz_dicas_metodo(metodo, lin, col, alvo, solucao
+                                    ,dificuldade=dificuldade
+                                    ,max_nos=max_nos
+                                    ,motor=motor
+                                    ,seed=seed)
         return [tabuleiro, puzzle, dificuldade]
 
     raise RuntimeError('não foi possível gerar um tabuleiro com mapa de '
