@@ -1,8 +1,21 @@
 # -*- coding: utf-8 -*-
 """Exemplo mínimo: cria um tabuleiro de Slitherlink e o resolve.
 
-Roda de dentro de claude_wksp/slitherlink/:  python exemplo_resolve.py
+Roda de QUALQUER pasta:  python caminho/para/exemplo_resolve.py
+Em notebook/Spyder, antes dos imports use:
+    import os
+    os.chdir(r'C:\\Users\\lucas\\OneDrive\\Desktop\\claude_wksp\\slitherlink')
 """
+import os
+import sys
+
+# layout plano (gerador/solver/main): garante a pasta do projeto no sys.path
+# e entra nela (saídas relativas caem aqui). Como script já funciona de fora,
+# isto só reforça e também serve quando o arquivo é importado de outro lugar.
+_AQUI = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _AQUI)
+os.chdir(_AQUI)
+
 import gerador as ger
 import solver as sv
 
