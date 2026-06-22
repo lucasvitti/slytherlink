@@ -1095,7 +1095,8 @@ def gera_Puzzle(densidade : float = 0.3
         Seed do numpy.random / dos métodos de redução.
     dificuldade : str, optional
         None -> estima a dificuldade (modo original); 'facil'|'medio'|'dificil'
-        -> alvo passado aos métodos do site. Padrão None.
+        -> alvo passado aos métodos do site; 'nenhuma'/'none' -> mapa COMPLETO
+        de dicas, sem reduzir (todas as dicas). Padrão None.
     metodo : str, optional
         Método de redução quando `dificuldade` é dada: 'guloso' (padrão),
         'binaria' ou 'cegar'. Padrão 'guloso'.
@@ -1142,8 +1143,8 @@ def gera_Puzzle(densidade : float = 0.3
             dif = sv.avalia_dificuldade(lin, col, puzzle)
             return [tabuleiro, puzzle, dif]
 
-        # Modo dificuldade-alvo: métodos do site (guloso/binaria/cegar).
-        # Confere a unicidade do mapa completo (igual ao reduz_dicas).
+        # Modos 'nenhuma' (mapa completo) e dificuldade-alvo (guloso/binaria/
+        # cegar). Confere a unicidade do mapa completo (igual ao reduz_dicas).
         alvo = tabuleiro.dicas.astype(int)
         solucao = sv.arestas_do_tabuleiro(tabuleiro)
         n, _ = _novo_oraculo(lin, col, alvo, max_nos, motor,
@@ -1154,6 +1155,8 @@ def gera_Puzzle(densidade : float = 0.3
             if verbose:
                 print('mapa completo ambíguo, gerando outro tabuleiro')
             continue
+        if dificuldade in ('nenhuma', 'none'):
+            return [tabuleiro, alvo, 'nenhuma']    # TODAS as dicas, sem reduzir
         puzzle = reduz_dicas_metodo(metodo, lin, col, alvo, solucao
                                     ,dificuldade=dificuldade
                                     ,max_nos=max_nos
